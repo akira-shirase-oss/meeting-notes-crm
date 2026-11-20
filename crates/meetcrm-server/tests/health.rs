@@ -15,8 +15,12 @@ use meetcrm_accounts::mail::Disabled;
 use meetcrm_accounts::{Accounts, Settings};
 use meetcrm_db::PoolSettings;
 use meetcrm_http::stack::{ErrorWindow, StackLimits};
+use meetcrm_media::store::FileStore;
+use meetcrm_media::tools::Tools;
+use meetcrm_meetings::Meetings;
 use meetcrm_server::health::Health;
 use meetcrm_server::{AppState, app};
+use meetcrm_transcribe::recorded::Recorded;
 use tower::ServiceExt as _;
 
 async fn app_on(database_url: &str, ready: Duration) -> (axum::Router, Arc<ErrorWindow>) {
@@ -29,12 +33,27 @@ async fn app_on(database_url: &str, ready: Duration) -> (axum::Router, Arc<Error
     let accounts = Accounts::new(pool.clone(), Settings::default(), Arc::new(Disabled))
         .await
         .unwrap();
+    let media = std::env::temp_dir().join(format!("meetcrm-health-{}", uuid::Uuid::new_v4()));
+    let meetings = Meetings::new(
+        pool.clone(),
+        accounts.clone(),
+        FileStore::open(&media).await.unwrap(),
+        Tools {
+            ffmpeg: "/nonexistent/ffmpeg".into(),
+            ffprobe: "/nonexistent/ffprobe".into(),
+            prlimit: "/nonexistent/prlimit".into(),
+        },
+        Arc::new(Recorded::new(&media)),
+        meetcrm_meetings::Settings::default(),
+    );
     let router = app(AppState {
         accounts,
         health: Health::new(pool, ready, errors.clone(), 50, 20),
         errors: errors.clone(),
         stack: StackLimits::default(),
         max_in_flight: 64,
+        meetings,
+        upload: StackLimits::default(),
     });
     (router, errors)
 }

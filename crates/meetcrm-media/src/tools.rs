@@ -263,7 +263,7 @@ pub fn segments(list: &[u8], max: u32) -> Result<Vec<(u32, u64, u64)>, MediaErro
     let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
     let mut out = Vec::new();
     for (index, line) in (0u32..).zip(lines.iter().copied()) {
-        let last = usize::try_from(index).is_ok_and(|i| i + 1 == lines.len());
+        let closing = usize::try_from(index).is_ok_and(|i| i + 1 == lines.len());
         let mut fields = line.split(',');
         let (Some(name), Some(start), Some(end), None) =
             (fields.next(), fields.next(), fields.next(), fields.next())
@@ -277,7 +277,7 @@ pub fn segments(list: &[u8], max: u32) -> Result<Vec<(u32, u64, u64)>, MediaErro
         }
         // The segment muxer closes with an empty segment when the input ends on a boundary.
         if end == start {
-            if last && index > 0 {
+            if closing && index > 0 {
                 break;
             }
             return Err(MediaError::Corrupt);

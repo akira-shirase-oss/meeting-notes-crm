@@ -1,5 +1,6 @@
 //! The hosted adapter against a local stand-in for the provider, and the recorded adapter's
 //! scripted faults.
+#![expect(clippy::unwrap_used, reason = "integration test helpers")]
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -18,8 +19,11 @@ use meetcrm_transcribe::{ChunkAudio, TranscribeError, Transcriber, Utterance};
 const KEY: &str = "dg-test-key-not-real";
 const SHA: &str = "aa00000000000000000000000000000000000000000000000000000000000000";
 
+/// What the fake provider saw: authorization, content type, query and body length.
+type SeenRequest = (String, String, String, usize);
+
 #[derive(Clone, Default)]
-struct Seen(Arc<Mutex<Vec<(String, String, String, usize)>>>);
+struct Seen(Arc<Mutex<Vec<SeenRequest>>>);
 
 /// A provider stand-in answering every request with `status` and `body` after `delay`.
 async fn provider(status: StatusCode, body: Vec<u8>, delay: Duration) -> (SocketAddr, Seen) {
@@ -54,8 +58,7 @@ async fn provider(status: StatusCode, body: Vec<u8>, delay: Duration) -> (Socket
                             .into_body()
                             .collect()
                             .await
-                            .map(|b| b.to_bytes().len())
-                            .unwrap_or(0);
+                            .map_or(0, |b| b.to_bytes().len());
                         record.0.lock().unwrap().push((auth, ctype, query, len));
                         tokio::time::sleep(delay).await;
                         let mut r = Response::new(Full::new(Bytes::from(body)));

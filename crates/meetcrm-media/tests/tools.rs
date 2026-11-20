@@ -1,5 +1,6 @@
 //! The runner against the pinned ffmpeg (scripts/install-ffmpeg.sh), and against stand-in
 //! tools that hang or spin, for the caps.
+#![expect(clippy::unwrap_used, reason = "integration test helpers")]
 
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt as _;

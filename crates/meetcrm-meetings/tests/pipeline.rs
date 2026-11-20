@@ -1,6 +1,7 @@
 //! The M1 pipeline end to end, in process: consent-gated upload, probe, transcode with the
 //! pinned ffmpeg, transcription through the recorded provider, the transcript, deletion;
-//! and every failure path END_GOAL names for M1 (failure cases 11 and 15).
+//! and every failure path `docs/END_GOAL.md` names for M1 (failure cases 11 and 15).
+#![expect(clippy::unwrap_used, reason = "integration test helpers")]
 
 mod common;
 

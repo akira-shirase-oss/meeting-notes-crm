@@ -95,6 +95,34 @@ pub const VARIABLES: &[(&str, &str, &str)] = &[
     ("MEETCRM_PLAN_MAX_MEMBERS", "10", "0..=100000"),
     ("MEETCRM_PLAN_MAX_TOKENS", "10", "0..=100000"),
     ("MEETCRM_PLAN_MAX_OWNED_WORKSPACES", "3", "0..=100000"),
+    (
+        "MEETCRM_MEDIA_DIR",
+        "/var/lib/meetcrm/media",
+        "a directory the server owns",
+    ),
+    (
+        "MEETCRM_FFMPEG_DIR",
+        "/opt/meetcrm/ffmpeg",
+        "the pinned ffmpeg and ffprobe",
+    ),
+    ("MEETCRM_PRLIMIT", "/usr/bin/prlimit", "util-linux prlimit"),
+    ("MEETCRM_TRANSCRIBER", "recorded", "recorded or hosted"),
+    (
+        "MEETCRM_RECORDED_DIR",
+        "/var/lib/meetcrm/recorded",
+        "the recorded provider's answers",
+    ),
+    (
+        "MEETCRM_TRANSCRIBE_URL",
+        "https://api.deepgram.com",
+        "the hosted provider's origin",
+    ),
+    ("MEETCRM_UPLOAD_MAX_BYTES", "268435456", "1024..=2147483648"),
+    ("MEETCRM_UPLOAD_TIMEOUT_S", "1800", "10..=7200"),
+    ("MEETCRM_UPLOAD_IDLE_MS", "30000", "100..=600000"),
+    ("MEETCRM_UPLOADS_AT_ONCE", "4", "1..=64"),
+    ("MEETCRM_MEDIA_MAX_DURATION_S", "14400", "1..=86400"),
+    ("MEETCRM_WORKERS", "2", "1..=64"),
 ];
 
 /// Every secret: credential name, the variable it may also come from, what it is.
@@ -123,6 +151,11 @@ pub const SECRETS: &[(&str, &str, &str)] = &[
         "app-password",
         "MEETCRM_APP_PASSWORD",
         "meetcrmctl bootstrap: the runtime role's password",
+    ),
+    (
+        "transcribe-key",
+        "MEETCRM_TRANSCRIBE_KEY",
+        "the hosted transcription provider's API key (MEETCRM_TRANSCRIBER=hosted)",
     ),
 ];
 
@@ -183,6 +216,39 @@ pub struct Config {
     pub smtp_relay: Option<SocketAddr>,
     /// The accounts kit.
     pub accounts: Settings,
+    /// Media, the pipeline and the transcription provider.
+    pub media: MediaConfig,
+}
+
+/// Media, the upload route, the pipeline workers and the provider.
+#[derive(Debug, Clone)]
+pub struct MediaConfig {
+    /// The media store's root.
+    pub dir: PathBuf,
+    /// Holds `ffmpeg` and `ffprobe`.
+    pub ffmpeg_dir: PathBuf,
+    /// `prlimit`.
+    pub prlimit: PathBuf,
+    /// The provider.
+    pub transcriber: TranscriberConfig,
+    /// The upload route's request deadline and body cap.
+    pub upload: StackLimits,
+    /// The pipeline.
+    pub meetings: meetcrm_meetings::Settings,
+}
+
+/// Which transcription adapter runs.
+#[derive(Debug, Clone)]
+pub enum TranscriberConfig {
+    /// Saved answers from a directory (tests, demos, load runs).
+    Recorded(PathBuf),
+    /// The hosted provider.
+    Hosted {
+        /// Its origin.
+        url: String,
+        /// Its key.
+        key: Secret,
+    },
 }
 
 /// Where settings and secrets come from (the process, or a test's map).
@@ -303,6 +369,70 @@ fn read_secret_file(path: &Path, owner_only: bool) -> Result<Secret, String> {
         return Err(format!("secret file {shown} is empty"));
     }
     Ok(Secret(value))
+}
+
+fn path(source: &dyn Source, name: &str, p: &mut Problems) -> PathBuf {
+    let raw = source
+        .var(name)
+        .unwrap_or_else(|| default_of(name).to_owned());
+    if !raw.starts_with('/') {
+        p.0.push(format!("{name} must be an absolute path"));
+    }
+    PathBuf::from(raw)
+}
+
+fn media(source: &dyn Source, p: &mut Problems) -> MediaConfig {
+    let transcriber = match source.var("MEETCRM_TRANSCRIBER").as_deref() {
+        None | Some("recorded") => {
+            TranscriberConfig::Recorded(path(source, "MEETCRM_RECORDED_DIR", p))
+        }
+        Some("hosted") => {
+            let url = source
+                .var("MEETCRM_TRANSCRIBE_URL")
+                .unwrap_or_else(|| default_of("MEETCRM_TRANSCRIBE_URL").to_owned());
+            let key = match secret(source, "transcribe-key", "MEETCRM_TRANSCRIBE_KEY") {
+                Ok(Some(key)) => key,
+                Ok(None) => {
+                    p.0.push("MEETCRM_TRANSCRIBER=hosted needs the key: credential transcribe-key, MEETCRM_TRANSCRIBE_KEY_FILE or MEETCRM_TRANSCRIBE_KEY".to_owned());
+                    Secret(String::new())
+                }
+                Err(e) => {
+                    p.0.push(e);
+                    Secret(String::new())
+                }
+            };
+            TranscriberConfig::Hosted { url, key }
+        }
+        Some(_) => {
+            p.0.push("MEETCRM_TRANSCRIBER must be recorded or hosted".to_owned());
+            TranscriberConfig::Recorded(PathBuf::new())
+        }
+    };
+    let max_upload_bytes: u64 = p.number(source, "MEETCRM_UPLOAD_MAX_BYTES", 1024..=2_147_483_648); // LIMIT(upload-bytes)
+    let upload = StackLimits {
+        request_timeout: p.secs(source, "MEETCRM_UPLOAD_TIMEOUT_S", 10..=7200), // LIMIT(upload-timeout)
+        max_body_bytes: usize::try_from(max_upload_bytes).unwrap_or(usize::MAX),
+    };
+    let defaults = meetcrm_meetings::Settings::default();
+    let meetings = meetcrm_meetings::Settings {
+        media: meetcrm_media::MediaLimits {
+            max_upload_bytes,
+            max_duration: p.secs(source, "MEETCRM_MEDIA_MAX_DURATION_S", 1..=86_400),
+            ..defaults.media
+        },
+        upload_idle: p.millis(source, "MEETCRM_UPLOAD_IDLE_MS", 100..=600_000),
+        uploads_at_once: p.number(source, "MEETCRM_UPLOADS_AT_ONCE", 1..=64),
+        workers: p.number(source, "MEETCRM_WORKERS", 1..=64),
+        ..defaults
+    };
+    MediaConfig {
+        dir: path(source, "MEETCRM_MEDIA_DIR", p),
+        ffmpeg_dir: path(source, "MEETCRM_FFMPEG_DIR", p),
+        prlimit: path(source, "MEETCRM_PRLIMIT", p),
+        transcriber,
+        upload,
+        meetings,
+    }
 }
 
 impl Config {
@@ -446,6 +576,7 @@ impl Config {
             password_concurrency: p.number(source, "MEETCRM_PASSWORD_CONCURRENCY", 1..=64),
             ..Settings::default()
         };
+        let media = media(source, &mut p);
         if stack.request_timeout > connection.request_grace {
             p.0.push("MEETCRM_REQUEST_GRACE_MS must be at least MEETCRM_REQUEST_TIMEOUT_MS, so an aged connection can finish its request".to_owned());
         }
@@ -465,6 +596,7 @@ impl Config {
                 log_format,
                 smtp_relay,
                 accounts,
+                media,
             })
         } else {
             Err(p.0)

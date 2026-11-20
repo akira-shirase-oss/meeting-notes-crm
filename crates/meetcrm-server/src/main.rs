@@ -15,9 +15,15 @@ use meetcrm_db::guard::{Refusal, check_at_startup};
 use meetcrm_db::schema;
 use meetcrm_http::stack::ErrorWindow;
 use meetcrm_http::{Drained, serve};
-use meetcrm_server::config::{Config, LogFormat, Process};
+use meetcrm_media::store::FileStore;
+use meetcrm_media::tools::Tools;
+use meetcrm_meetings::Meetings;
+use meetcrm_server::config::{Config, LogFormat, Process, TranscriberConfig};
 use meetcrm_server::health::Health;
 use meetcrm_server::{AppState, app};
+use meetcrm_transcribe::Transcriber;
+use meetcrm_transcribe::hosted::Hosted;
+use meetcrm_transcribe::recorded::Recorded;
 use tokio::net::TcpListener;
 
 fn main() -> ExitCode {
@@ -122,12 +128,36 @@ async fn run(config: Config) -> Result<Drained, Stop> {
         config.error_rate_permille,
         config.error_min_requests,
     );
+    let media = &config.media;
+    let transcriber: Arc<dyn Transcriber> = match &media.transcriber {
+        TranscriberConfig::Recorded(dir) => Arc::new(Recorded::new(dir)),
+        TranscriberConfig::Hosted { url, key } => Arc::new(Hosted::new(
+            url,
+            key.expose(),
+            media.meetings.provider_deadline,
+        )?),
+    };
+    let meetings = Meetings::new(
+        pool.clone(),
+        accounts.clone(),
+        FileStore::open(&media.dir).await?,
+        Tools {
+            ffmpeg: media.ffmpeg_dir.join("ffmpeg"),
+            ffprobe: media.ffmpeg_dir.join("ffprobe"),
+            prlimit: media.prlimit.clone(),
+        },
+        transcriber,
+        media.meetings.clone(),
+    );
+    let workers = tokio::spawn(meetings.clone().run_workers(shutdown.clone()));
     let router = app(AppState {
         accounts,
         health,
         errors,
         stack: config.stack,
         max_in_flight: config.max_in_flight,
+        meetings,
+        upload: media.upload,
     });
     let listener = TcpListener::bind(config.listen).await?;
     tracing::info!(listen = %listener.local_addr()?, version = env!("CARGO_PKG_VERSION"), "listening");
@@ -135,6 +165,7 @@ async fn run(config: Config) -> Result<Drained, Stop> {
     if let Ok(name) = signal.await {
         tracing::info!(signal = name, "drained after signal");
     }
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), workers).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), pool.close()).await;
     Ok(drained)
 }
