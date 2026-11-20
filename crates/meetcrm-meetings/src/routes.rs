@@ -379,6 +379,7 @@ async fn receive(m: &Meetings, mut body: Body) -> Result<Received, MeetingsError
         .receive(m.inner.settings.media.max_upload_bytes)
         .await?;
     loop {
+        // LIMIT(upload-idle)
         let frame = tokio::time::timeout(m.inner.settings.upload_idle, body.frame())
             .await
             .map_err(|_| MeetingsError::Stalled)?;

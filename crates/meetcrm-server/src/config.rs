@@ -408,9 +408,9 @@ fn media(source: &dyn Source, p: &mut Problems) -> MediaConfig {
             TranscriberConfig::Recorded(PathBuf::new())
         }
     };
-    let max_upload_bytes: u64 = p.number(source, "MEETCRM_UPLOAD_MAX_BYTES", 1024..=2_147_483_648); // LIMIT(upload-bytes)
+    let max_upload_bytes: u64 = p.number(source, "MEETCRM_UPLOAD_MAX_BYTES", 1024..=2_147_483_648);
     let upload = StackLimits {
-        request_timeout: p.secs(source, "MEETCRM_UPLOAD_TIMEOUT_S", 10..=7200), // LIMIT(upload-timeout)
+        request_timeout: p.secs(source, "MEETCRM_UPLOAD_TIMEOUT_S", 10..=7200),
         max_body_bytes: usize::try_from(max_upload_bytes).unwrap_or(usize::MAX),
     };
     let defaults = meetcrm_meetings::Settings::default();

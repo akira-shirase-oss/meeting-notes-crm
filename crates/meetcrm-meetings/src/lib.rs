@@ -59,15 +59,15 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             media: MediaLimits::default(),
-            upload_idle: Duration::from_secs(30), // LIMIT(upload-idle)
-            uploads_at_once: 4,                   // LIMIT(uploads-at-once)
-            provider_deadline: Duration::from_mins(15), // LIMIT(provider-deadline)
-            max_attempts: 5,                      // LIMIT(job-attempts)
+            upload_idle: Duration::from_secs(30),
+            uploads_at_once: 4,
+            provider_deadline: Duration::from_mins(15),
+            max_attempts: 5,
             lease: Duration::from_secs(60),
             retry_base: Duration::from_secs(30),
             retry_max: Duration::from_mins(15),
             poll: Duration::from_secs(1),
-            workers: 2, // LIMIT(workers)
+            workers: 2,
         }
     }
 }
@@ -107,7 +107,7 @@ impl Meetings {
         transcriber: Arc<dyn Transcriber>,
         settings: Settings,
     ) -> Self {
-        let uploads = Arc::new(Semaphore::new(settings.uploads_at_once.max(1)));
+        let uploads = Arc::new(Semaphore::new(settings.uploads_at_once.max(1))); // LIMIT(uploads-at-once)
         Self {
             inner: Arc::new(Inner {
                 db,

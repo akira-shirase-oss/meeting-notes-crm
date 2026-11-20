@@ -44,8 +44,8 @@ impl Default for MediaLimits {
             transcode_deadline: Duration::from_secs(600),
             cpu_seconds: 600,
             max_output_bytes: 512 * 1024 * 1024,
-            chunk: Duration::from_hours(1),
-            max_chunks: 4,
+            chunk: Duration::from_mins(10),
+            max_chunks: 48,
         }
     }
 }

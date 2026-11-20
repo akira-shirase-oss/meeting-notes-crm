@@ -91,8 +91,9 @@ impl Incoming {
     pub async fn write(&mut self, data: &[u8]) -> Result<(), MediaError> {
         let len = u64::try_from(data.len()).unwrap_or(u64::MAX);
         self.bytes = self.bytes.saturating_add(len);
+        // LIMIT(upload-bytes)
         if self.bytes > self.cap {
-            return Err(MediaError::TooLarge); // LIMIT(upload-bytes)
+            return Err(MediaError::TooLarge);
         }
         self.hasher.update(data);
         self.file

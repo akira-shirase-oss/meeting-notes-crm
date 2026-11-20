@@ -291,7 +291,12 @@ async fn media_bounds_a_stalled_upload_is_cut_at_the_idle_deadline() {
     let meeting = kit.meeting(&ana).await;
     kit.consent(&ana, meeting).await;
     let (body, polled) = untouched();
-    let cut = kit.upload_body(&ana, meeting, body).await;
+    let cut = tokio::time::timeout(
+        Duration::from_secs(30),
+        kit.upload_body(&ana, meeting, body),
+    )
+    .await
+    .unwrap();
     assert!(polled.load(Ordering::SeqCst));
     assert_eq!(cut.status, StatusCode::REQUEST_TIMEOUT, "{}", cut.body);
     assert_eq!(cut.code(), Some("upload_stalled"));
@@ -393,7 +398,8 @@ async fn a_provider_that_never_answers_is_cut_at_the_deadline_and_retried() {
     let meeting = kit.uploaded(&ana, audio).await;
     assert_eq!(kit.work().await, Outcome::Transcoded);
     kit.recorded.fault(ANY, Fault::Hang);
-    assert_eq!(kit.work().await, Outcome::Retrying("provider_timeout"));
+    let worked = tokio::time::timeout(Duration::from_secs(30), kit.work()).await;
+    assert_eq!(worked.unwrap(), Outcome::Retrying("provider_timeout"));
     assert_eq!(
         kit.show(&ana, meeting).await.body["reason"],
         "provider_timeout"

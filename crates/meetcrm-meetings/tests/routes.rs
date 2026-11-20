@@ -1,7 +1,6 @@
 //! Route-level tenant isolation for every meetings endpoint, and who may write: another
 //! workspace's meeting is not found through any route, a member of one workspace cannot
 //! reach another's, and an API token reads but never writes.
-#![expect(clippy::unwrap_used, reason = "integration test helpers")]
 
 mod common;
 

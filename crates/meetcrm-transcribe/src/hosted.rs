@@ -24,7 +24,7 @@ pub const QUERY: &str =
     "model=nova-3&diarize=true&utterances=true&punctuate=true&smart_format=true";
 
 /// The largest chunk sent.
-pub const MAX_AUDIO_BYTES: u64 = 512 * 1024 * 1024; // LIMIT(provider-upload)
+pub const MAX_AUDIO_BYTES: u64 = 512 * 1024 * 1024;
 
 /// A configuration the adapter refuses.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -113,6 +113,7 @@ impl Hosted {
             .await
             .map_err(|_| TranscribeError::Unavailable)?
             .len();
+        // LIMIT(provider-upload)
         if size > MAX_AUDIO_BYTES {
             return Err(TranscribeError::Rejected);
         }

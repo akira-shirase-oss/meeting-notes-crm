@@ -14,10 +14,10 @@ use crate::MediaError;
 pub const DEMUXERS: &str = "wav,mp3,flac,ogg,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,aac";
 
 /// The most bytes of ffprobe output read.
-pub const MAX_PROBE_OUTPUT: usize = 256 * 1024; // LIMIT(probe-output)
+pub const MAX_PROBE_OUTPUT: usize = 256 * 1024;
 
 /// The most streams a recording may declare.
-pub const MAX_STREAMS: usize = 16; // LIMIT(probe-streams)
+pub const MAX_STREAMS: usize = 16;
 
 /// What the pipeline needs to know about a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +52,12 @@ struct Format {
 
 /// Parses ffprobe's JSON and refuses what the pipeline must not process.
 pub fn parse(json: &[u8], max_duration: Duration) -> Result<Probe, MediaError> {
+    // LIMIT(probe-output)
     if json.len() > MAX_PROBE_OUTPUT {
         return Err(MediaError::Corrupt);
     }
     let out: Output = serde_json::from_slice(json).map_err(|_| MediaError::Corrupt)?;
+    // LIMIT(probe-streams)
     if out.streams.len() > MAX_STREAMS {
         return Err(MediaError::Corrupt);
     }
@@ -93,6 +95,7 @@ pub fn parse(json: &[u8], max_duration: Duration) -> Result<Probe, MediaError> {
     if duration_ms == 0 {
         return Err(MediaError::Corrupt);
     }
+    // LIMIT(media-duration)
     if u128::from(duration_ms) > max_duration.as_millis() {
         return Err(MediaError::TooLong);
     }

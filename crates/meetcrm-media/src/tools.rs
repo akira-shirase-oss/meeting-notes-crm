@@ -101,7 +101,7 @@ impl Tools {
             "-format_whitelist",
             DEMUXERS,
             "-t",
-            &max_seconds, // LIMIT(media-duration)
+            &max_seconds,
             "-i",
         ] {
             args.push(a.into());
@@ -161,11 +161,12 @@ impl Tools {
             total = total.saturating_add(meta.len());
             files += 1;
             if files > limits.max_chunks as usize + 1 {
-                return Err(MediaError::OutputLimit); // LIMIT(chunk-count)
+                return Err(MediaError::OutputLimit);
             }
         }
+        // LIMIT(output-total)
         if total > limits.max_output_bytes {
-            return Err(MediaError::OutputLimit); // LIMIT(output-total)
+            return Err(MediaError::OutputLimit);
         }
         let list = tokio::fs::read(out_dir.join(SEGMENT_LIST))
             .await
@@ -209,8 +210,8 @@ impl Tools {
         let mut child = command.spawn().map_err(|_| MediaError::Unavailable)?;
         let mut stdout = child.stdout.take().ok_or(MediaError::Unavailable)?;
         let mut out = Vec::new();
+        // LIMIT(ffmpeg-deadline)
         let waited = tokio::time::timeout(deadline, async {
-            // LIMIT(probe-output)
             let limit = u64::try_from(MAX_PROBE_OUTPUT).unwrap_or(u64::MAX) + 1;
             (&mut stdout)
                 .take(limit)
@@ -222,7 +223,7 @@ impl Tools {
             }
             child.wait().await.map_err(|_| MediaError::Unavailable)
         })
-        .await; // LIMIT(ffmpeg-deadline)
+        .await;
         let status = match waited {
             Ok(Ok(status)) => status,
             Ok(Err(e)) => {
@@ -282,6 +283,7 @@ pub fn segments(list: &[u8], max: u32) -> Result<Vec<(u32, u64, u64)>, MediaErro
             }
             return Err(MediaError::Corrupt);
         }
+        // LIMIT(chunk-count)
         if index >= max {
             return Err(MediaError::OutputLimit);
         }

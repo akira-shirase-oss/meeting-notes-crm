@@ -170,10 +170,37 @@ async fn a_partial_answer_is_partial() {
 #[tokio::test]
 async fn a_provider_that_does_not_answer_times_out() {
     let (addr, _) = provider(StatusCode::OK, answer(5.0), Duration::from_secs(120)).await;
+    let asked = tokio::time::timeout(
+        Duration::from_secs(30),
+        ask(addr, Duration::from_millis(300)),
+    )
+    .await;
+    assert_eq!(asked, Ok(Err(TranscribeError::Timeout)));
+}
+
+#[tokio::test]
+async fn audio_past_the_upload_cap_is_never_sent() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let path = std::env::temp_dir().join(format!("meetcrm-big-{}.flac", std::process::id()));
+    // Sparse: the size is what is checked, before a byte is read.
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(meetcrm_transcribe::hosted::MAX_AUDIO_BYTES + 1)
+        .unwrap();
+    let hosted = Hosted::new(&format!("http://{addr}"), KEY, Duration::from_secs(5)).unwrap();
+    let chunk = ChunkAudio {
+        path: &path,
+        duration_ms: 5_000,
+        recording: SHA,
+        index: 0,
+    };
     assert_eq!(
-        ask(addr, Duration::from_millis(300)).await,
-        Err(TranscribeError::Timeout)
+        hosted.transcribe(chunk).await,
+        Err(TranscribeError::Rejected)
     );
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test]

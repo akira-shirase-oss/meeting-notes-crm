@@ -9,11 +9,11 @@ use serde::Deserialize;
 use crate::{TranscribeError, Utterance};
 
 /// The largest answer read.
-pub const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024; // LIMIT(answer-bytes)
+pub const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 /// The most utterances one chunk may have.
-pub const MAX_UTTERANCES: usize = 50_000; // LIMIT(utterances)
+pub const MAX_UTTERANCES: usize = 50_000;
 /// The most characters one utterance keeps.
-pub const MAX_TEXT_CHARS: usize = 4_000; // LIMIT(utterance-text)
+pub const MAX_TEXT_CHARS: usize = 4_000;
 /// The most speakers one chunk may have.
 pub const MAX_SPEAKERS: u32 = 32;
 /// How far an answer's times may run past the audio's measured end, or its duration fall
@@ -46,6 +46,7 @@ struct Raw {
 
 /// Imports an answer for a chunk of `duration_ms`.
 pub fn deepgram(body: &[u8], duration_ms: u64) -> Result<Vec<Utterance>, TranscribeError> {
+    // LIMIT(answer-bytes)
     if body.len() > MAX_ANSWER_BYTES {
         return Err(TranscribeError::Malformed);
     }
@@ -62,6 +63,7 @@ pub fn deepgram(body: &[u8], duration_ms: u64) -> Result<Vec<Utterance>, Transcr
         .results
         .and_then(|r| r.utterances)
         .ok_or(TranscribeError::Malformed)?;
+    // LIMIT(utterances)
     if raw.len() > MAX_UTTERANCES {
         return Err(TranscribeError::Malformed);
     }
@@ -116,6 +118,7 @@ pub fn clean(text: &str) -> String {
     let mut chars = 0usize;
     let mut space = false;
     for c in text.chars() {
+        // LIMIT(utterance-text)
         if chars >= MAX_TEXT_CHARS {
             break;
         }
@@ -220,6 +223,11 @@ mod tests {
                 String::from_utf8_lossy(&body)
             );
         }
+        let one = json!([{"start": 0, "end": 1, "speaker": 0, "transcript": "x"}]);
+        let mut padded = answer(&json!(10), &one);
+        assert!(deepgram(&padded, 10_000).is_ok());
+        padded.resize(MAX_ANSWER_BYTES + 1, b' ');
+        assert_eq!(deepgram(&padded, 10_000), Err(TranscribeError::Malformed));
         let many: Vec<_> = (0..=MAX_UTTERANCES)
             .map(|_| json!({"start": 0, "end": 1, "speaker": 0, "transcript": "x"}))
             .collect();

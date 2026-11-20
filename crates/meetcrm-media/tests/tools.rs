@@ -180,10 +180,8 @@ async fn a_hanging_tool_is_killed_at_its_deadline() {
         ..MediaLimits::default()
     };
     let started = Instant::now();
-    assert_eq!(
-        tools.probe(&input, &limits).await,
-        Err(MediaError::Deadline)
-    );
+    let probed = tokio::time::timeout(Duration::from_secs(30), tools.probe(&input, &limits)).await;
+    assert_eq!(probed, Ok(Err(MediaError::Deadline)));
     assert!(started.elapsed() < Duration::from_secs(30));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -223,6 +221,45 @@ async fn a_transcode_past_its_output_cap_is_killed() {
         tools().transcode(&input, &out, &limits).await,
         Err(MediaError::OutputLimit)
     );
+    // Killed at the cap, not measured after the fact: no file ever grew past it.
+    for entry in std::fs::read_dir(&out).unwrap() {
+        assert!(entry.unwrap().metadata().unwrap().len() <= 4096);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn chunks_together_past_the_output_cap_are_refused() {
+    let dir = scratch();
+    let input = tone(&dir, "in.wav", 6);
+    let out = dir.join("chunks");
+    std::fs::create_dir(&out).unwrap();
+    // Each one-second chunk fits under the cap; the six together do not.
+    let limits = MediaLimits {
+        chunk: Duration::from_secs(1),
+        max_output_bytes: 30_000,
+        ..MediaLimits::default()
+    };
+    assert_eq!(
+        tools().transcode(&input, &out, &limits).await,
+        Err(MediaError::OutputLimit)
+    );
+    let largest = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .max()
+        .unwrap();
+    assert!(largest < 30_000, "{largest}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_receive_past_its_cap_is_refused() {
+    let dir = scratch();
+    let store = meetcrm_media::store::FileStore::open(&dir).await.unwrap();
+    let mut incoming = store.receive(10).await.unwrap();
+    assert_eq!(incoming.write(b"12345678").await, Ok(()));
+    assert_eq!(incoming.write(b"9abc").await, Err(MediaError::TooLarge));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

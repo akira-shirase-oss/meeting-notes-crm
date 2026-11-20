@@ -257,7 +257,7 @@ impl Meetings {
         status: &'static str,
     ) -> Result<Outcome, MeetingsError> {
         let retry = transient
-            && u32::try_from(job.attempts).unwrap_or(u32::MAX) < self.inner.settings.max_attempts;
+            && u32::try_from(job.attempts).unwrap_or(u32::MAX) < self.inner.settings.max_attempts; // LIMIT(job-attempts)
         let mut tx = self.inner.db.begin().await?;
         if !Self::hold(&mut tx, job).await? {
             return Ok(Outcome::LostLease);
@@ -407,7 +407,7 @@ impl Meetings {
                 index,
             };
             let answer = tokio::time::timeout(
-                self.inner.settings.provider_deadline,
+                self.inner.settings.provider_deadline, // LIMIT(job-provider-deadline)
                 self.inner.transcriber.transcribe(audio),
             )
             .await
