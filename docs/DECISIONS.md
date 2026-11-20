@@ -26,3 +26,18 @@ Rust backend on Axum, SQLx and tokio (the template's stack); SvelteKit + TypeScr
 (strict) for the web UI once the maintainer chooses this product's design system — no
 `web/` product code before that.
 Everything else follows `docs/END_GOAL.md`.
+
+## D-004 — M1 media and transcription
+
+- **ffmpeg**: the static FFmpeg 7.0.2 amd64 build, pinned by SHA-256 (`scripts/install-ffmpeg.sh`);
+  never a system ffmpeg. It runs with argv only (no shell), a cleared environment, `file:` as
+  the only protocol, a demuxer allowlist, and `prlimit` caps on CPU time, file size, open files
+  and core dumps, under a wall-clock deadline.
+- **Provider port**: `meetcrm_transcribe::Transcriber`; a hosted Deepgram-shaped HTTPS adapter
+  (hyper + hyper-rustls, webpki roots) and a recorded adapter for tests, demos and load. No
+  live key exists yet: the hosted adapter is tested against a local stand-in only.
+- **Chunks**: ten-minute FLAC chunks (16 kHz mono), each transcribed and applied once; speaker
+  labels are per chunk (`Speaker N (part M)`) until cross-chunk speaker matching is decided.
+- **Fixture**: the 30-minute call is synthetic: a script written for the repository
+  (`fixtures/roleplay/call.txt`) read by two espeak-ng voices; generated in CI, never committed.
+

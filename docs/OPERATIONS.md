@@ -115,6 +115,18 @@ What each part does, and how it is proven:
 - **Mail:** set `MEETCRM_SMTP_RELAY=127.0.0.1:25` once a local relay (Postfix as a smarthost
   to the provider) runs; until then sign-up reports `verification_email: failed`.
 
+### Media tools
+
+The pipeline runs only the pinned ffmpeg and ffprobe, installed (checksum-verified) where
+`MEETCRM_FFMPEG_DIR` points:
+
+```sh
+sudo scripts/install-ffmpeg.sh /opt/meetcrm/ffmpeg
+```
+
+Media lives under `MEETCRM_MEDIA_DIR` (default `/var/lib/meetcrm/media`, inside the unit's
+`StateDirectory`); audio is removed once transcribed and when a meeting is deleted.
+
 ## Configuration and secrets
 
 - `/etc/meetcrm/env`, root-owned, `0644`: every setting, from `deploy/env.example`, which
