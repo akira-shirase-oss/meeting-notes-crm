@@ -63,7 +63,10 @@ pub fn parse(json: &[u8], max_duration: Duration) -> Result<Probe, MediaError> {
     let name = format.format_name.ok_or(MediaError::Corrupt)?;
     // ffprobe names a demuxer family with commas ("mov,mp4,m4a,3gp,3g2,mj2"): every part
     // must be allowed.
-    if name.is_empty() || !name.split(',').all(|part| DEMUXERS.split(',').any(|d| d == part))
+    if name.is_empty()
+        || !name
+            .split(',')
+            .all(|part| DEMUXERS.split(',').any(|d| d == part))
     {
         return Err(MediaError::Corrupt);
     }
@@ -163,9 +166,19 @@ mod tests {
             (b"{\"streams\": []}", MediaError::Corrupt),
         ];
         for (json, want) in cases {
-            assert_eq!(parse(json, HOUR), Err(want), "{}", String::from_utf8_lossy(json));
+            assert_eq!(
+                parse(json, HOUR),
+                Err(want),
+                "{}",
+                String::from_utf8_lossy(json)
+            );
         }
-        assert_eq!(parse(&sample("wav", "3600", "audio"), HOUR).unwrap().duration_ms, 3_600_000);
+        assert_eq!(
+            parse(&sample("wav", "3600", "audio"), HOUR)
+                .unwrap()
+                .duration_ms,
+            3_600_000
+        );
         let huge = vec![b' '; MAX_PROBE_OUTPUT + 1];
         assert_eq!(parse(&huge, HOUR), Err(MediaError::Corrupt));
         let streams: Vec<_> = (0..=MAX_STREAMS)

@@ -1050,6 +1050,30 @@ dependencies = [
 [[package]]
 name = "meetcrm-meetings"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "hex",
+ "http-body",
+ "http-body-util",
+ "meetcrm-accounts",
+ "meetcrm-db",
+ "meetcrm-http",
+ "meetcrm-media",
+ "meetcrm-transcribe",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "meetcrm-server"

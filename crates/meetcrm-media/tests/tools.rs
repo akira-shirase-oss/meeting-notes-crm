@@ -179,7 +179,10 @@ async fn a_hanging_tool_is_killed_at_its_deadline() {
         ..MediaLimits::default()
     };
     let started = Instant::now();
-    assert_eq!(tools.probe(&input, &limits).await, Err(MediaError::Deadline));
+    assert_eq!(
+        tools.probe(&input, &limits).await,
+        Err(MediaError::Deadline)
+    );
     assert!(started.elapsed() < Duration::from_secs(30));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -198,7 +201,10 @@ async fn a_spinning_tool_is_killed_at_its_cpu_cap() {
         probe_deadline: Duration::from_secs(60),
         ..MediaLimits::default()
     };
-    assert_eq!(tools.probe(&input, &limits).await, Err(MediaError::CpuLimit));
+    assert_eq!(
+        tools.probe(&input, &limits).await,
+        Err(MediaError::CpuLimit)
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

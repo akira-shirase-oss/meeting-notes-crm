@@ -14,21 +14,29 @@ WITH expected_triggers (tbl, name, digest) AS (
     -- The events, timing, level and function of each trigger.
     VALUES ('account_events', 'account_events_append_only', 'bd4b64bf88a43d91c8f0229e240a55e1'),
            ('account_events', 'account_events_no_truncate', '91d454c7d8890d590a6e8305d980409e'),
-           ('account_events', 'account_events_stamp', '0558d12b98ccd7beaf941f03835399de')
+           ('account_events', 'account_events_stamp', '0558d12b98ccd7beaf941f03835399de'),
+           ('meetings', 'meetings_queue_garbage', '85010be1c0482d46548b0a7b60f3245c')
 ), expected_functions (name, digest) AS (
     -- The whole definition, body and settings included.
-    VALUES ('refuse_change', 'aa7b64a277372e0a3e2126f016e3a79d'),
+    VALUES ('queue_media_garbage', '2a951f2bca32efbe9f041317b3b7dfad'),
+           ('refuse_change', 'aa7b64a277372e0a3e2126f016e3a79d'),
            ('stamp_event', 'a9e1e842d2841cfd8220413bd5548495')
 ), expected_grants (tbl, privileges) AS (
     -- Every table in public, with exactly what meetcrm_app holds on it.
     VALUES ('_sqlx_migrations', 'SELECT'),
            ('account_events', 'INSERT,SELECT'),
            ('api_tokens', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('consents', 'DELETE,INSERT,SELECT'),
            ('email_tokens', 'DELETE,INSERT,SELECT,UPDATE'),
            ('invites', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('jobs', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('media_chunks', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('media_garbage', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('meetings', 'DELETE,INSERT,SELECT,UPDATE'),
            ('members', 'DELETE,INSERT,SELECT,UPDATE'),
            ('sessions', 'DELETE,INSERT,SELECT,UPDATE'),
            ('sign_in_trust', 'DELETE,INSERT,SELECT,UPDATE'),
+           ('transcript_segments', 'DELETE,INSERT,SELECT,UPDATE'),
            ('users', 'DELETE,INSERT,SELECT,UPDATE'),
            ('workspaces', 'DELETE,INSERT,SELECT,UPDATE')
 ), tables AS (

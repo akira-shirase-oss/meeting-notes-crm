@@ -68,7 +68,13 @@ impl Tools {
         .collect();
         args.push(file_url(input));
         let out = self
-            .run(&self.ffprobe, &args, limits.probe_deadline, limits.cpu_seconds, 0)
+            .run(
+                &self.ffprobe,
+                &args,
+                limits.probe_deadline,
+                limits.cpu_seconds,
+                0,
+            )
             .await?;
         probe::parse(&out, limits.max_duration)
     }
@@ -143,8 +149,15 @@ impl Tools {
         let mut entries = tokio::fs::read_dir(out_dir)
             .await
             .map_err(|_| MediaError::Unavailable)?;
-        while let Some(entry) = entries.next_entry().await.map_err(|_| MediaError::Unavailable)? {
-            let meta = entry.metadata().await.map_err(|_| MediaError::Unavailable)?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|_| MediaError::Unavailable)?
+        {
+            let meta = entry
+                .metadata()
+                .await
+                .map_err(|_| MediaError::Unavailable)?;
             total = total.saturating_add(meta.len());
             files += 1;
             if files > limits.max_chunks as usize + 1 {
@@ -247,11 +260,10 @@ pub fn chunk_name(index: u32) -> String {
 /// `max` of them, at least one.
 pub fn segments(list: &[u8], max: u32) -> Result<Vec<(u32, u64, u64)>, MediaError> {
     let text = std::str::from_utf8(list).map_err(|_| MediaError::Corrupt)?;
+    let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
     let mut out = Vec::new();
-    for (index, line) in (0u32..).zip(text.lines().filter(|l| !l.is_empty())) {
-        if index >= max {
-            return Err(MediaError::OutputLimit);
-        }
+    for (index, line) in (0u32..).zip(lines.iter().copied()) {
+        let last = usize::try_from(index).is_ok_and(|i| i + 1 == lines.len());
         let mut fields = line.split(',');
         let (Some(name), Some(start), Some(end), None) =
             (fields.next(), fields.next(), fields.next(), fields.next())
@@ -260,8 +272,18 @@ pub fn segments(list: &[u8], max: u32) -> Result<Vec<(u32, u64, u64)>, MediaErro
         };
         let start = probe::millis(start).ok_or(MediaError::Corrupt)?;
         let end = probe::millis(end).ok_or(MediaError::Corrupt)?;
-        if name != chunk_name(index) || end <= start {
+        if name != chunk_name(index) || end < start {
             return Err(MediaError::Corrupt);
+        }
+        // The segment muxer closes with an empty segment when the input ends on a boundary.
+        if end == start {
+            if last && index > 0 {
+                break;
+            }
+            return Err(MediaError::Corrupt);
+        }
+        if index >= max {
+            return Err(MediaError::OutputLimit);
         }
         out.push((index, start, end - start));
     }
@@ -276,4 +298,25 @@ fn file_url(path: &Path) -> OsString {
     let mut url = OsString::from("file:");
     url.push(path.as_os_str());
     url
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+
+    #[test]
+    fn a_closing_empty_segment_is_dropped_and_any_other_is_corrupt() {
+        let list = b"chunk-0000.flac,0.000000,2.016000\nchunk-0001.flac,2.016000,4.000000\nchunk-0002.flac,4.000000,4.000000\n";
+        assert_eq!(segments(list, 2), Ok(vec![(0, 0, 2016), (1, 2016, 1984)]));
+        let middle = b"chunk-0000.flac,0.0,1.0\nchunk-0001.flac,1.0,1.0\nchunk-0002.flac,1.0,2.0\n";
+        assert_eq!(segments(middle, 9), Err(MediaError::Corrupt));
+        assert_eq!(
+            segments(b"chunk-0000.flac,0.0,0.0\n", 9),
+            Err(MediaError::Corrupt)
+        );
+        assert_eq!(
+            segments(b"chunk-0000.flac,0.0,1.0\nchunk-0001.flac,1.0,2.0\n", 1),
+            Err(MediaError::OutputLimit)
+        );
+    }
 }

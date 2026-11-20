@@ -103,8 +103,14 @@ impl Incoming {
 
     /// Flushes and syncs the file.
     pub async fn finish(mut self) -> Result<Received, MediaError> {
-        self.file.flush().await.map_err(|_| MediaError::Unavailable)?;
-        self.file.sync_all().await.map_err(|_| MediaError::Unavailable)?;
+        self.file
+            .flush()
+            .await
+            .map_err(|_| MediaError::Unavailable)?;
+        self.file
+            .sync_all()
+            .await
+            .map_err(|_| MediaError::Unavailable)?;
         Ok(Received {
             staging: self.staging,
             sha256: self.hasher.finalize().into(),
