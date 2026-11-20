@@ -182,7 +182,9 @@ mod tests {
                 .duration_ms,
             3_600_000
         );
-        let huge = vec![b' '; MAX_PROBE_OUTPUT + 1];
+        // Valid JSON, padded past the cap: refused for its size alone.
+        let mut huge = sample("wav", "10", "audio");
+        huge.resize(MAX_PROBE_OUTPUT + 1, b' ');
         assert_eq!(parse(&huge, HOUR), Err(MediaError::Corrupt));
         let streams: Vec<_> = (0..=MAX_STREAMS)
             .map(|_| serde_json::json!({"codec_type": "audio", "sample_rate": "8000", "channels": 1}))

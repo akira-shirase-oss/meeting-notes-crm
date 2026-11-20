@@ -105,6 +105,15 @@ if [ -z "${MEETCRM_TEST_DATABASE_URL:-}" ]; then
   eval "$(scripts/stack.sh env)"
 fi
 export MEETCRM_TEST_DATABASE_URL
+# The media tests run the pinned ffmpeg (checksum-verified, installed once).
+scripts/install-ffmpeg.sh target/tools/bin
+# The thirty-minute role-played call, generated (never committed) when espeak-ng is here.
+if command -v espeak-ng >/dev/null 2>&1; then
+  scripts/make-roleplay.sh target/roleplay
+  export MEETCRM_ROLEPLAY_DIR="$PWD/target/roleplay"
+else
+  echo "note: espeak-ng is not installed; the role-played call test is skipped locally (CI runs it)"
+fi
 cargo test --workspace --locked
 
 step "drills: PostgreSQL and SQLite restore, their controls, the upgrade rehearsal"

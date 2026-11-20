@@ -46,6 +46,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q sqlite3
+          # The role-played call's two voices (scripts/make-roleplay.sh), pinned.
+          sudo apt-get install -y -q --no-install-recommends espeak-ng=1.51+dfsg-12build1
           scripts/install-age.sh "$RUNNER_TEMP/bin"
           scripts/install-k6.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -66,8 +68,10 @@ jobs:
           channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
           rustup toolchain install "$channel" --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Database
-        run: scripts/stack.sh up
+      - name: Database and the pinned ffmpeg
+        run: |
+          scripts/stack.sh up
+          scripts/install-ffmpeg.sh target/tools/bin
       - name: Prove every limit
         run: |
           eval "$(scripts/stack.sh env)"
