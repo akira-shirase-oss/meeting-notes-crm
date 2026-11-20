@@ -54,7 +54,10 @@ build() {
   local next="$DRILL_WORK/next-src"
   mkdir -p "$next"
   tar --exclude ./target --exclude ./.git -cf - . | tar -xf - -C "$next"
-  cat >"$next/migrations/0003_rehearsal.sql" <<'SQL'
+  # vN+1's migration comes after the last one vN has.
+  local last
+  last="$(find migrations -maxdepth 1 -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | tail -1)"
+  cat >"$next/migrations/$(printf '%04d' $((10#${last%%_*} + 1)))_rehearsal.sql" <<'SQL'
 -- The rehearsal's vN+1: one new table, with its grant.
 CREATE TABLE rehearsal_notes (id integer PRIMARY KEY, body text NOT NULL);
 GRANT SELECT, INSERT ON rehearsal_notes TO meetcrm_app;
@@ -86,7 +89,7 @@ sink() {
 step "start a fake SMTP sink" sink
 
 serve() { # log -> starts $prefix/current, waits for /readyz
-  MEETCRM_LISTEN="127.0.0.1:$port" MEETCRM_SMTP_RELAY="127.0.0.1:$sink_port" MEETCRM_PUBLIC_URL="$base" \
+  MEETCRM_MEDIA_DIR="$DRILL_WORK/media" MEETCRM_LISTEN="127.0.0.1:$port" MEETCRM_SMTP_RELAY="127.0.0.1:$sink_port" MEETCRM_PUBLIC_URL="$base" \
     MEETCRM_COOKIE_SECURE=false MEETCRM_LOG_FORMAT=json "$prefix/current/bin/meetcrm-server" >"$DRILL_WORK/$1" 2>&1 &
   server_pid=$!
   pids+=($server_pid)
@@ -138,7 +141,7 @@ step "vN+1 serves: the token made under vN still works" hello
 
 refused_by_vn() {
   local code=0
-  MEETCRM_LISTEN="127.0.0.1:0" "$DRILL_WORK/vN/meetcrm-server" >"$DRILL_WORK/vN-refused.log" 2>&1 || code=$?
+  MEETCRM_MEDIA_DIR="$DRILL_WORK/media" MEETCRM_LISTEN="127.0.0.1:0" "$DRILL_WORK/vN/meetcrm-server" >"$DRILL_WORK/vN-refused.log" 2>&1 || code=$?
   [ "$code" = 4 ] && grep -q newer "$DRILL_WORK/vN-refused.log"
 }
 step "the rollback gate: vN refuses the upgraded schema (exit 4)" refused_by_vn

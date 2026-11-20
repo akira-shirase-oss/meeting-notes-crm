@@ -46,8 +46,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q sqlite3
-          # The role-played call's two voices (scripts/make-roleplay.sh), pinned.
-          sudo apt-get install -y -q --no-install-recommends espeak-ng=1.51+dfsg-12build1
+          # The role-played call's two voices (scripts/make-roleplay.sh), pinned to the runner image's (Ubuntu 26.04) package.
+          sudo apt-get install -y -q --no-install-recommends espeak-ng=1.52.0+dfsg-5build1
           scripts/install-age.sh "$RUNNER_TEMP/bin"
           scripts/install-k6.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
