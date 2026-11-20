@@ -12,7 +12,7 @@ use meetcrm_accounts::domain::{Action, Role};
 use meetcrm_accounts::error::AccountsError;
 use meetcrm_accounts::{Access, Via};
 use meetcrm_media::MediaError;
-use meetcrm_media::store::Received;
+use meetcrm_media::store::{Incoming, Received};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row as _;
@@ -316,7 +316,14 @@ async fn upload(
         .map_err(|_| MeetingsError::Busy)?;
 
     let received = receive(&m, body).await?;
-    let probe = m.inner.tools.probe(&received.path(), limits).await?;
+    // A refused recording leaves nothing behind by the time the answer is sent.
+    let probe = match m.inner.tools.probe(&received.path(), limits).await {
+        Ok(probe) => probe,
+        Err(e) => {
+            received.staging.discard().await;
+            return Err(e.into());
+        }
+    };
 
     let (sha, bytes) = (received.sha256, received.bytes);
     let mut tx = m.inner.db.begin().await?;
@@ -372,12 +379,26 @@ async fn upload(
 }
 
 /// Streams a body to staging: capped in size, with a deadline on every read.
-async fn receive(m: &Meetings, mut body: Body) -> Result<Received, MeetingsError> {
+async fn receive(m: &Meetings, body: Body) -> Result<Received, MeetingsError> {
     let mut incoming = m
         .inner
         .store
         .receive(m.inner.settings.media.max_upload_bytes)
         .await?;
+    // A refused upload leaves nothing behind by the time the answer is sent.
+    if let Err(e) = fill(m, &mut incoming, body).await {
+        incoming.discard().await;
+        return Err(e);
+    }
+    let received = incoming.finish().await?;
+    if received.bytes == 0 {
+        received.staging.discard().await;
+        return Err(MediaError::Corrupt.into());
+    }
+    Ok(received)
+}
+
+async fn fill(m: &Meetings, incoming: &mut Incoming, mut body: Body) -> Result<(), MeetingsError> {
     loop {
         // LIMIT(upload-idle)
         let frame = tokio::time::timeout(m.inner.settings.upload_idle, body.frame())
@@ -394,11 +415,7 @@ async fn receive(m: &Meetings, mut body: Body) -> Result<Received, MeetingsError
             }
         }
     }
-    let received = incoming.finish().await?;
-    if received.bytes == 0 {
-        return Err(MediaError::Corrupt.into());
-    }
-    Ok(received)
+    Ok(())
 }
 
 /// Whether a body error is the stack's body limit.

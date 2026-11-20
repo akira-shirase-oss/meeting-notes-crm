@@ -87,6 +87,11 @@ impl Received {
 }
 
 impl Incoming {
+    /// Removes the partial upload now.
+    pub async fn discard(self) {
+        self.staging.discard().await;
+    }
+
     /// Appends `data`, refusing past the cap (the partial file goes with the staging).
     pub async fn write(&mut self, data: &[u8]) -> Result<(), MediaError> {
         let len = u64::try_from(data.len()).unwrap_or(u64::MAX);
