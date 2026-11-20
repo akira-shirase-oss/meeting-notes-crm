@@ -1,0 +1,39 @@
+[package]
+name = "meetcrm-server"
+description = "The service skeleton: configuration, the health contract, wiring, and meetcrmctl."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "meetcrm-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "meetcrmctl"
+path = "src/bin/meetcrmctl.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+meetcrm-accounts.workspace = true
+meetcrm-db.workspace = true
+meetcrm-http.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+meetcrm-db = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["process"] }
+tower.workspace = true
+
+[lints]
+workspace = true
