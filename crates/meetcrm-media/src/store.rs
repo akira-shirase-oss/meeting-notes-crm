@@ -237,13 +237,25 @@ impl FileStore {
     pub async fn file_count(&self) -> io::Result<usize> {
         let mut count = 0;
         let mut stack = vec![self.root.clone()];
+        // A staging directory may vanish mid-walk (its drop removes it): skip what is gone.
         while let Some(dir) = stack.pop() {
-            let mut entries = tokio::fs::read_dir(&dir).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                if entry.file_type().await?.is_dir() {
-                    stack.push(entry.path());
-                } else {
-                    count += 1;
+            let mut entries = match tokio::fs::read_dir(&dir).await {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            loop {
+                let entry = match entries.next_entry().await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => break,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+                    Err(e) => return Err(e),
+                };
+                match entry.file_type().await {
+                    Ok(t) if t.is_dir() => stack.push(entry.path()),
+                    Ok(_) => count += 1,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
                 }
             }
         }
