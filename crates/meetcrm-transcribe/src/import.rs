@@ -124,7 +124,8 @@ pub fn clean(text: &str) -> String {
             continue;
         }
         // Bidirectional overrides and zero-width characters can disguise text.
-        if matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}') {
+        if matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+        {
             continue;
         }
         if space {
@@ -154,8 +155,8 @@ mod tests {
 
     #[test]
     fn a_diarised_answer_imports_in_time_order() {
-        let body = answer(&
-            json!(10.02),
+        let body = answer(
+            &json!(10.02),
             &json!([
                 {"start": 4.5, "end": 9.9, "speaker": 1, "transcript": "Second\nline.", "confidence": 0.9},
                 {"start": 0.08, "end": 4.2, "speaker": 0, "transcript": "  First   line. "}
@@ -165,15 +166,28 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                Utterance { speaker: 0, start_ms: 80, end_ms: 4_200, text: "First line.".into() },
-                Utterance { speaker: 1, start_ms: 4_500, end_ms: 9_900, text: "Second line.".into() },
+                Utterance {
+                    speaker: 0,
+                    start_ms: 80,
+                    end_ms: 4_200,
+                    text: "First line.".into()
+                },
+                Utterance {
+                    speaker: 1,
+                    start_ms: 4_500,
+                    end_ms: 9_900,
+                    text: "Second line.".into()
+                },
             ]
         );
     }
 
     #[test]
     fn a_partial_answer_is_never_complete() {
-        let body = answer(&json!(4.0), &json!([{"start": 0, "end": 4, "speaker": 0, "transcript": "Hi"}]));
+        let body = answer(
+            &json!(4.0),
+            &json!([{"start": 0, "end": 4, "speaker": 0, "transcript": "Hi"}]),
+        );
         assert_eq!(deepgram(&body, 10_000), Err(TranscribeError::Partial));
         assert!(deepgram(&body, 5_000).is_ok());
     }
@@ -181,7 +195,10 @@ mod tests {
     #[test]
     fn answers_that_break_a_bound_are_malformed() {
         let u = |s: serde_json::Value, e: serde_json::Value, sp: serde_json::Value| {
-            answer(&json!(10), &json!([{"start": s, "end": e, "speaker": sp, "transcript": "x"}]))
+            answer(
+                &json!(10),
+                &json!([{"start": s, "end": e, "speaker": sp, "transcript": "x"}]),
+            )
         };
         let cases = [
             u(json!(5), json!(4), json!(0)),
@@ -196,18 +213,29 @@ mod tests {
             b"not json".to_vec(),
         ];
         for body in cases {
-            assert_eq!(deepgram(&body, 10_000), Err(TranscribeError::Malformed), "{}", String::from_utf8_lossy(&body));
+            assert_eq!(
+                deepgram(&body, 10_000),
+                Err(TranscribeError::Malformed),
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
         }
         let many: Vec<_> = (0..=MAX_UTTERANCES)
             .map(|_| json!({"start": 0, "end": 1, "speaker": 0, "transcript": "x"}))
             .collect();
-        assert_eq!(deepgram(&answer(&json!(10), &json!(many)), 10_000), Err(TranscribeError::Malformed));
+        assert_eq!(
+            deepgram(&answer(&json!(10), &json!(many)), 10_000),
+            Err(TranscribeError::Malformed)
+        );
     }
 
     #[test]
     fn text_is_cleaned_and_bounded() {
         assert_eq!(clean("a\u{202E}b\u{0007}c\r\nd"), "ab c d");
-        assert_eq!(clean(&"é".repeat(MAX_TEXT_CHARS + 10)).chars().count(), MAX_TEXT_CHARS);
+        assert_eq!(
+            clean(&"é".repeat(MAX_TEXT_CHARS + 10)).chars().count(),
+            MAX_TEXT_CHARS
+        );
         assert_eq!(clean(" \n\t "), "");
     }
 

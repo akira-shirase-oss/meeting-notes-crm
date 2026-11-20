@@ -20,7 +20,8 @@ use crate::import::{self, MAX_ANSWER_BYTES};
 use crate::{ChunkAudio, TranscribeError, Transcriber, Transcription};
 
 /// The query: the model, diarisation and utterance grouping.
-pub const QUERY: &str = "model=nova-3&diarize=true&utterances=true&punctuate=true&smart_format=true";
+pub const QUERY: &str =
+    "model=nova-3&diarize=true&utterances=true&punctuate=true&smart_format=true";
 
 /// The largest chunk sent.
 pub const MAX_AUDIO_BYTES: u64 = 512 * 1024 * 1024; // LIMIT(provider-upload)
@@ -59,7 +60,10 @@ impl std::fmt::Debug for Hosted {
 impl Hosted {
     /// An adapter for `base` (`https://api.deepgram.com`) with `key`.
     pub fn new(base: &str, key: &str, deadline: Duration) -> Result<Self, ConfigError> {
-        let base: Uri = base.trim_end_matches('/').parse().map_err(|_| ConfigError::Url)?;
+        let base: Uri = base
+            .trim_end_matches('/')
+            .parse()
+            .map_err(|_| ConfigError::Url)?;
         let host = base.host().ok_or(ConfigError::Url)?;
         match base.scheme_str() {
             Some("https") => {}

@@ -65,7 +65,9 @@ impl Recorded {
 
     /// The path of a chunk's saved answer.
     pub fn answer_path(&self, recording: &str, index: u32) -> PathBuf {
-        self.dir.join(recording).join(format!("chunk-{index:04}.json"))
+        self.dir
+            .join(recording)
+            .join(format!("chunk-{index:04}.json"))
     }
 
     fn next_fault(&self, key: &str) -> Option<Fault> {
