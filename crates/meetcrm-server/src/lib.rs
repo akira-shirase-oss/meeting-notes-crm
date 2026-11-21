@@ -14,6 +14,7 @@ use meetcrm_accounts::Accounts;
 use meetcrm_accounts::domain::Action;
 use meetcrm_accounts::error::AccountsError;
 use meetcrm_http::stack::{self, ErrorWindow, StackLimits};
+use meetcrm_meetings::Meetings;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -32,6 +33,10 @@ pub struct AppState {
     pub stack: StackLimits,
     /// Requests at once on `/v1` before shedding.
     pub max_in_flight: usize,
+    /// The meetings service.
+    pub meetings: Meetings,
+    /// The upload route's bounds.
+    pub upload: StackLimits,
 }
 
 /// A sample product route: readable with a workspace's API token or by its members.
@@ -54,6 +59,7 @@ pub fn app(state: AppState) -> Router {
         .with_state(state.accounts.clone());
     let v1 = meetcrm_accounts::router(state.accounts.clone())
         .merge(product)
+        .merge(meetcrm_meetings::router(state.meetings.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             stack::gate(state.max_in_flight),
             stack::shed,
@@ -64,5 +70,17 @@ pub fn app(state: AppState) -> Router {
         .route("/errorz", get(health::errorz))
         .with_state(state.health.clone());
     let router = Router::new().nest("/v1", v1).merge(health);
-    stack::apply(router, state.stack, state.errors)
+    // The upload route streams a recording: its own body cap and deadline, and a gate of its
+    // own the size of the main one (an upload holds a permit for minutes, so sharing the
+    // main gate would let uploads starve reads); the meetings service adds the upload
+    // slots (server-wide, per workspace, per person) and the minimum rate.
+    let uploads = meetcrm_meetings::upload_router(state.meetings.clone()).route_layer(
+        axum::middleware::from_fn_with_state(stack::gate(state.max_in_flight), stack::shed),
+    );
+    let uploads = Router::new().nest("/v1", uploads);
+    stack::apply(router, state.stack, state.errors.clone()).merge(stack::apply(
+        uploads,
+        state.upload,
+        state.errors,
+    ))
 }

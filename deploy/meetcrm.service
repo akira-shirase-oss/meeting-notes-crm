@@ -25,6 +25,7 @@ EnvironmentFile=/etc/meetcrm/env
 # Secrets as systemd credentials: readable by this service only, never in the environment
 # (which `systemctl show` prints). The server reads $CREDENTIALS_DIRECTORY/database-url.
 LoadCredential=database-url:/etc/meetcrm/credentials/database-url
+LoadCredential=transcribe-key:/etc/meetcrm/credentials/transcribe-key
 ExecStart=/opt/meetcrm/current/bin/meetcrm-server
 Restart=on-failure
 RestartSec=5s

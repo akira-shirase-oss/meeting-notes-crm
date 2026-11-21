@@ -1,0 +1,25 @@
+[package]
+name = "meetcrm-media"
+description = "Recordings on disk and the bounded ffprobe/ffmpeg runner: probe, refuse, transcode to chunks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "test-util"] }
+
+[lints]
+workspace = true

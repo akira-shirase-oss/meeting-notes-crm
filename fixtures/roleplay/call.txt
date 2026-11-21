@@ -1,0 +1,143 @@
+# A role-played sales call, written for this repository: two invented people at invented
+# companies, read by two espeak-ng voices (scripts/make-roleplay.sh). No real person's voice
+# or words. A is the seller (Northwind Software), B the buyer (Harbor Logistics).
+# Lines: "A: text" or "B: text"; "[pause N]" is N seconds of silence (a screen share, a
+# lookup); "#" starts a comment.
+A: Good morning, thanks for making the time today. Can you hear me clearly?
+B: Yes, loud and clear. Thanks for setting this up.
+A: Great. I have us down for thirty minutes. I would like to cover where you are with the pilot, what is working, what is not, and what a full rollout would look like.
+B: That works. I have a hard stop at the half hour, so let us keep it tight.
+A: Understood. To start, can you remind me how many dispatchers used the pilot last month?
+B: Twelve dispatchers across two depots. The north depot used it every day. The south depot used it maybe three days a week.
+A: Why the difference between the two depots?
+B: The south depot still runs a paper board for the morning shift. The shift lead there does not trust the screen yet.
+A: That is common in the first month. What would make the shift lead trust it?
+B: Honestly, seeing it be right for two weeks in a row. Last month the route estimates were off twice, and he remembers both times.
+A: Do you know which days those were?
+B: I think the fourth and the eighteenth. Both were days with road closures on the ring road.
+A: That matches what our support team saw. The closure feed from the city arrived late on both days. We now poll it every five minutes instead of every hour.
+B: When did that change go live?
+A: Two weeks ago, on the first of the month. Since then the estimates have been within ten minutes on every route we can measure.
+B: Good. I will want to see that in writing before I take it to the shift lead.
+A: I will send you the report this afternoon. It breaks the accuracy down by depot and by day.
+B: Please include the south depot separately. That is the one I need to win over.
+A: Will do. Let us move to what is working. What has the north depot told you?
+B: They like the handover notes. The night shift used to leave notes on a whiteboard. Now they type them in and the morning shift sees them on the route card.
+A: Has that changed anything you can measure?
+B: Missed pickups went down. We had nine missed pickups in the month before the pilot and three in the first month of the pilot.
+A: That is a big drop. Do you think the notes caused it, or something else?
+B: Mostly the notes. Two of the three misses were a driver who was new that week.
+A: That is helpful. Would you be comfortable with us using that number in a case study, without your company name?
+B: I would need to ask our legal team. Do not use it until I confirm.
+A: Of course. Nothing goes out without your written approval.
+[pause 150]
+A: While I pull up the pricing sheet, can you tell me who else needs to sign off on a full rollout?
+B: Our operations director signs anything over fifty thousand a year. Finance reviews it first.
+A: And what does finance usually ask for?
+B: A three year cost, the exit terms, and what happens to our data if we leave.
+A: I can answer the data question now. You can export everything at any time, and when the contract ends we delete your data within thirty days and send you a certificate.
+B: Thirty days is fine. Finance will want that clause in the contract itself, not just in a policy page.
+A: That is reasonable. I will ask our legal team to put it in the order form.
+B: Thank you. What about the three year cost?
+A: For forty dispatchers across four depots, the list price is thirty eight thousand a year. With a three year term we can hold that price for all three years.
+B: That is under the fifty thousand line, so it would not need the director.
+A: It would not, but I would still suggest we brief her. A rollout touches every depot, and she will hear about it either way.
+B: Fair point. She prefers short written briefings. One page, no slides.
+A: I can draft that page. Would you review it before it goes to her?
+B: Yes. Send it to me first and I will edit it.
+A: Good. Now the harder part. What is not working?
+B: Three things. The mobile app logs drivers out every night. The depot map is wrong at the south depot. And the reports take too long to load.
+A: Let us take them one at a time. The logouts first. How often does that happen?
+B: Every driver, every morning. They have to sign in again before the first stop. It costs maybe two minutes each, but they complain loudly.
+A: That is a setting on our side. Sessions expire after twelve hours by default. We can raise it to seven days for your account.
+B: Is that safe? These are shared phones in some cases.
+A: For shared phones I would keep the shorter session and turn on the quick unlock code instead. A four digit code instead of a full password.
+B: That sounds better. Can you turn that on for the pilot now?
+A: I can ask support to enable it today. You would see it tomorrow morning.
+B: Please do. That alone will make the drivers happier.
+A: Noted. Second, the depot map at the south depot. What is wrong with it?
+B: The loading bays are numbered from the wrong end. Bay one on the map is bay twelve on the ground.
+A: That should be a quick fix. Can you send me a photo of the bay signs, or a sketch?
+B: I will ask the south depot manager to send a photo this week.
+A: Thank you. Once we have it, the fix takes about a day.
+B: Good. And the reports?
+A: Which reports are slow?
+B: The monthly route summary. It takes almost a minute to open, and sometimes it times out.
+A: How many routes are in a month for you?
+B: About four thousand across both depots.
+A: That is more than the report was built for. We have a new version that is precomputed overnight. It opens in a couple of seconds.
+B: When is that available?
+A: It is in beta now. I can add you to the beta if you are comfortable with that.
+B: Only if the old report still works while we try the new one.
+A: It does. Both stay available, and you can switch back at any time.
+B: Then yes, add us.
+[pause 75]
+A: I have added you. You will get an email from our beta team with the details.
+B: Thanks. Can we talk about training? If we roll out to four depots, I cannot be the one training everyone.
+A: We include two remote training sessions per depot in the first month, and a train the trainer session for your shift leads.
+B: Remote will not work for the drivers. Most of them never sit at a desk.
+A: Then we can do one on site day per depot. That is an extra cost of one thousand two hundred per day.
+B: Can you include the on site days in the first year price?
+A: I can include two on site days at no cost if we sign the three year term. The other two would be at the daily rate.
+B: I will take that to finance. They will ask for all four.
+A: I understand. I cannot promise all four, but I will ask my manager.
+B: Please do. Put it in writing either way.
+A: I will. Let me check the calendar for on site dates.
+[pause 120]
+A: Our trainer is free the second and third week of next month. Would either of those work for the north depot?
+B: The third week. The second week is our inventory count.
+A: The third week it is, pending the contract.
+B: What else do you need from me before you send the order form?
+A: Three things. The number of dispatchers per depot, the start date you want, and the name of the person who will sign.
+B: I can give you the start date now. We want to go live at the start of the next quarter.
+A: That gives us about seven weeks. That is enough time if the order form is signed in the next three weeks.
+B: That is tight with finance, but possible.
+A: What usually slows finance down?
+B: Security questionnaires. They will send you one with about two hundred questions.
+A: We have a completed questionnaire on file, and our latest audit report. I can send both with the order form so they do not have to wait.
+B: That would save at least a week.
+A: Then I will include them. Is there a specific format finance prefers?
+B: They prefer a spreadsheet for the questionnaire. The audit report can be a document.
+A: Understood. Spreadsheet for the questions, document for the audit.
+[pause 90]
+B: One more thing. Our current contract with the old routing vendor ends at the end of the quarter. We cannot overlap more than two weeks.
+A: That works with the plan. Go live at the start of the quarter, with the old system available as a fallback for two weeks.
+B: And if the rollout slips?
+A: Then we would delay your first invoice by the same amount. You would not pay for weeks you cannot use.
+B: I like that. Put that in the order form too.
+A: I will. Give me a moment to go through my notes, then let me read back what I have so far, so we agree on next steps.
+[pause 120]
+B: Go ahead.
+A: First, I send the accuracy report today, with the south depot broken out separately.
+B: Yes.
+A: Second, support turns on the quick unlock code for the pilot today, so drivers see it tomorrow morning.
+B: Correct.
+A: Third, you ask the south depot manager for a photo of the bay signs this week, and we fix the map within a day of getting it.
+B: Yes, I will ask him this afternoon.
+A: Fourth, you are in the beta for the new monthly report, and the old one stays available.
+B: Right.
+A: Fifth, I ask my manager about all four on site training days, and confirm in writing either way.
+B: Yes, and by when?
+A: By the end of this week.
+B: Good.
+A: Sixth, I draft a one page briefing for your operations director and send it to you to edit first.
+B: Yes. Plain language, no slides.
+A: Seventh, I send the order form with the data deletion clause, the delayed invoice clause, the security questionnaire as a spreadsheet and the audit report, within two weeks.
+B: Can you make it ten days? That gives finance more time.
+A: Ten days it is.
+B: And you still need the dispatcher numbers per depot and the signer.
+A: Yes. Can you send those by next Tuesday?
+B: I can send the numbers by Monday. The signer depends on finance. I will tell you by Tuesday.
+A: Perfect. And you will confirm with legal whether we can use the missed pickup numbers in a case study.
+B: Yes, but do not expect an answer quickly. Legal takes a while.
+A: No rush on that one. It does not block anything.
+[pause 60]
+B: I think that covers it. Is there anything you need from me that we have not talked about?
+A: Only one question. Is there anyone else, besides finance and your director, who could stop this?
+B: Our IT team will want to review the phone setup. They manage the shared phones.
+A: Would it help if our support lead met with them before the rollout?
+B: Yes. Thirty minutes would be enough. I will find a time and send you an invite.
+A: Thank you. I will make sure our support lead is free.
+B: Great. Then I will look for the report this afternoon.
+A: You will have it by four o'clock. Thanks again for your time, and for the honest feedback on the pilot.
+B: Thanks. Talk soon.

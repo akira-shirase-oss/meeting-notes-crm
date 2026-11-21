@@ -27,6 +27,7 @@ build machine; `BIN` names their directory). Set these first:
 | `DATABASE` | the database the bootstrap creates | `app` |
 | `DB_HOST` | host and port of the database, for the role URLs | `ep-….neon.tech:5432` |
 | `DB_PARAMS` | URL parameters for the role URLs: Neon requires TLS | `?sslmode=require` |
+| `TRANSCRIBE_KEY` | the transcription provider's API key (the default `hosted` provider) | from the provider's console |
 | `BIN`, `RELEASE` | the binaries, and this release's name | `target/release`, the commit |
 
 <!-- operator:install -->
@@ -44,7 +45,8 @@ printf 'MEETCRM_PUBLIC_URL=https://%s\nMEETCRM_TRUSTED_PROXIES=127.0.0.1\n' "$ME
 (umask 077
   printf '%s\n' "$ADMIN_DATABASE_URL" >/etc/meetcrm/credentials/admin-database-url
   openssl rand -hex 24 >/etc/meetcrm/credentials/owner-password
-  openssl rand -hex 24 >/etc/meetcrm/credentials/app-password)
+  openssl rand -hex 24 >/etc/meetcrm/credentials/app-password
+  printf '%s\n' "$TRANSCRIBE_KEY" >/etc/meetcrm/credentials/transcribe-key)
 
 # 3. The roles and the database (as the administrator), then the two role URLs. The
 #    administrator's URL is removed afterwards: nothing that runs needs it.
@@ -114,6 +116,18 @@ What each part does, and how it is proven:
   which a restart cannot fix.
 - **Mail:** set `MEETCRM_SMTP_RELAY=127.0.0.1:25` once a local relay (Postfix as a smarthost
   to the provider) runs; until then sign-up reports `verification_email: failed`.
+
+### Media tools
+
+The pipeline runs only the pinned ffmpeg and ffprobe, installed (checksum-verified) where
+`MEETCRM_FFMPEG_DIR` points:
+
+```sh
+sudo scripts/install-ffmpeg.sh /opt/meetcrm/ffmpeg
+```
+
+Media lives under `MEETCRM_MEDIA_DIR` (default `/var/lib/meetcrm/media`, inside the unit's
+`StateDirectory`); audio is removed once transcribed and when a meeting is deleted.
 
 ## Configuration and secrets
 

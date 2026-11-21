@@ -66,6 +66,8 @@ export DB_HOST="$host_part"
 export DB_PARAMS=""
 export BIN="$PWD/target/release"
 export RELEASE=first
+# The guide's install never calls the provider; the key only has to be present.
+export TRANSCRIBE_KEY=install-test-placeholder
 
 run_block install
 # The VM's stand-in for a public certificate: trust Caddy's local CA, once it has made one.
