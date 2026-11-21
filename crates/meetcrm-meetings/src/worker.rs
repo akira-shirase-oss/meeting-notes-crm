@@ -308,8 +308,7 @@ impl Meetings {
             .unwrap_or(0)
             .min(16);
         let full = s.retry_base.saturating_mul(1 << doublings).min(s.retry_max);
-        let random = Uuid::new_v4().as_bytes()[0];
-        full.mul_f64(0.5 + f64::from(random) / 510.0)
+        jittered(full, Uuid::new_v4().as_bytes()[0])
     }
 
     /// Ends an attempt that failed: queued again after a backoff while attempts remain and
@@ -620,4 +619,28 @@ fn chunk_columns(chunks: &[meetcrm_media::tools::Chunk]) -> Result<ChunkColumns,
         );
     }
     Ok((idx, offsets, durations))
+}
+
+/// Half to all of `full`, by `random`: jobs failed together (a provider outage) come back
+/// spread out instead of all at once.
+fn jittered(full: Duration, random: u8) -> Duration {
+    full.mul_f64(0.5 + f64::from(random) / 510.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Jobs failed by one outage must not all retry at the same instant: the wait spans half
+    // to all of the backoff, and different draws give different waits.
+    #[test]
+    fn backoff_is_jittered_between_half_and_all_of_the_full_wait() {
+        let full = Duration::from_secs(8);
+        assert_eq!(jittered(full, 0), Duration::from_secs(4));
+        assert_eq!(jittered(full, u8::MAX), full);
+        let waits: std::collections::BTreeSet<Duration> =
+            (0..=u8::MAX).map(|r| jittered(full, r)).collect();
+        assert_eq!(waits.len(), 256);
+        assert!(waits.iter().all(|w| *w >= full / 2 && *w <= full));
+    }
 }

@@ -66,9 +66,9 @@ impl Tools {
             "-analyzeduration",
             PROBE_MICROS,
             "-protocol_whitelist",
-            "file",
+            "file", // LIMIT(protocol-allowlist)
             "-format_whitelist",
-            DEMUXERS,
+            DEMUXERS, // LIMIT(demuxer-allowlist)
             "-print_format",
             "json",
             "-show_format",
@@ -318,9 +318,9 @@ fn input_args(input: &Path, limits: &MediaLimits) -> Vec<OsString> {
         "-analyzeduration",
         PROBE_MICROS,
         "-protocol_whitelist",
-        "file",
+        "file", // LIMIT(protocol-allowlist)
         "-format_whitelist",
-        DEMUXERS,
+        DEMUXERS, // LIMIT(demuxer-allowlist)
         "-t",
         &max_seconds,
         "-i",

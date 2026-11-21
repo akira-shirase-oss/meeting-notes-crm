@@ -399,3 +399,35 @@ async fn a_tool_killed_from_outside_is_not_reported_as_its_cpu_cap() {
     assert_eq!(refused, Err(("media_killed", true)));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// The playlist attack above is stopped by either list alone, so it cannot show that both
+// are in place: this one fails if either is dropped or widened, each on its own.
+#[tokio::test]
+async fn each_tool_opens_files_only_through_the_demuxer_allowlist() {
+    let dir = scratch();
+    let input = tone(&dir, "in.wav", 1);
+    let lists = [
+        ("-protocol_whitelist", "file"),
+        (
+            "-format_whitelist",
+            "wav,mp3,flac,ogg,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,aac",
+        ),
+    ];
+    let tools = Tools {
+        ffprobe: insisting_tool(&dir, "ffprobe", &lists),
+        ffmpeg: insisting_tool(&dir, "ffmpeg", &lists),
+        ..tools()
+    };
+    let limits = MediaLimits::default();
+    assert_eq!(
+        tools.probe(&input, &limits).await.unwrap().duration_ms,
+        1_000
+    );
+    let out = dir.join("chunks");
+    std::fs::create_dir(&out).unwrap();
+    assert_eq!(
+        tools.transcode(&input, &out, &limits).await.unwrap().len(),
+        1
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

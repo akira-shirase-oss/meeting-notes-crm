@@ -245,3 +245,31 @@ async fn every_role_records_and_only_owners_and_admins_delete_anothers_meeting()
         );
     }
 }
+
+// Attack: a title that reorders how the text around it is shown (Trojan Source); refused
+// with its own code, and nothing is created.
+#[tokio::test]
+async fn a_title_with_bidi_controls_is_refused() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let path = format!("/v1/workspaces/{}/meetings", ana.workspace);
+    for title in [
+        "invoice\u{202E}fdp.exe",
+        "a\u{2066}b\u{2069}",
+        "x\u{200F}y",
+        "\u{061C}z",
+    ] {
+        let answer = kit
+            .call(
+                Method::POST,
+                &path,
+                Some(&ana.session),
+                Some(json!({ "title": title })),
+            )
+            .await;
+        assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY, "{title:?}");
+        assert_eq!(answer.code(), Some("title_invalid"), "{title:?}");
+    }
+    let listed = kit.call(Method::GET, &path, Some(&ana.session), None).await;
+    assert_eq!(listed.body["meetings"].as_array().unwrap().len(), 0);
+}

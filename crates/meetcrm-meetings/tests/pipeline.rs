@@ -169,6 +169,11 @@ async fn media_bounds_corrupt_file_is_refused_and_nothing_is_stored() {
 /// A one-second Ogg Opus file whose last page claims six hours: the container's own
 /// duration, which ffprobe reports without decoding.
 fn six_hour_ogg() -> Vec<u8> {
+    ogg_claiming(6 * 3600)
+}
+
+/// One second of Opus in Ogg whose last page claims `seconds` (granule patched, CRC fixed).
+fn ogg_claiming(seconds: u64) -> Vec<u8> {
     let dir = common::scratch("ogg");
     let path = dir.join("call.ogg");
     let status = std::process::Command::new(common::bin_dir().join("ffmpeg"))
@@ -188,7 +193,7 @@ fn six_hour_ogg() -> Vec<u8> {
     let mut ogg = std::fs::read(&path).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     let last = ogg.windows(4).rposition(|w| w == b"OggS").unwrap();
-    let granule: u64 = 6 * 3600 * 48_000;
+    let granule: u64 = seconds * 48_000;
     ogg[last + 6..last + 14].copy_from_slice(&granule.to_le_bytes());
     ogg[last + 22..last + 26].fill(0);
     let crc = ogg_crc(&ogg[last..]);
@@ -998,4 +1003,18 @@ async fn a_transcript_page_stops_at_its_byte_budget() {
     assert_eq!(rest.status, StatusCode::OK, "{}", rest.body);
     assert_eq!(rest.body["segments"].as_array().unwrap().len(), 300 - page);
     assert!(rest.body["next"].is_null());
+}
+
+// A container's duration is a claim: an Ogg whose last page claims thirty seconds but
+// holds one is recorded as the length its chunks measure, not the length it claims.
+#[tokio::test]
+async fn a_meetings_duration_is_its_measured_chunks_not_the_containers_claim() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let meeting = kit.uploaded(&ana, ogg_claiming(30)).await;
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    let duration = kit.show(&ana, meeting).await.body["duration_ms"]
+        .as_u64()
+        .unwrap();
+    assert!((900..=1_100).contains(&duration), "{duration}");
 }
