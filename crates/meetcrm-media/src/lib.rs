@@ -4,7 +4,8 @@
 //! and only then moved under its meeting's key: a refused file never reaches the store
 //! ([`store`]). ffprobe's JSON is parsed by [`probe::parse`], which trusts nothing in it.
 //! Both tools run through [`tools::Tools`]: an argument vector (never a shell), a cleared
-//! environment, `prlimit` caps on CPU time, output file size and open files, a wall-clock
+//! environment, `prlimit` caps on CPU time, address space, output file size and open files,
+//! one thread per stage and bounded probing, a wall-clock
 //! deadline that kills the process, only the `file` protocol and a fixed list of demuxers
 //! (so a playlist cannot make ffmpeg fetch a URL or read another file).
 
@@ -27,6 +28,9 @@ pub struct MediaLimits {
     pub transcode_deadline: Duration,
     /// CPU seconds one ffmpeg or ffprobe process may use.
     pub cpu_seconds: u64,
+    /// The address space one ffmpeg or ffprobe process may map, in bytes: a crafted stream
+    /// cannot make a tool allocate the service's memory (the tools share its cgroup).
+    pub max_memory_bytes: u64,
     /// The largest file a transcode may write, and the cap on all its chunks together.
     pub max_output_bytes: u64,
     /// The length of one transcription chunk.
@@ -43,6 +47,7 @@ impl Default for MediaLimits {
             probe_deadline: Duration::from_secs(10),
             transcode_deadline: Duration::from_secs(600),
             cpu_seconds: 600,
+            max_memory_bytes: 512 * 1024 * 1024,
             max_output_bytes: 512 * 1024 * 1024,
             chunk: Duration::from_mins(10),
             max_chunks: 48,
@@ -75,6 +80,10 @@ pub enum MediaError {
     /// The tool tried to write more than the output cap.
     #[error("media_output_limit")]
     OutputLimit,
+    /// The tool was killed by something other than its caps (the kernel's OOM killer):
+    /// not the recording's fault for certain, so retried within the attempt bound.
+    #[error("media_killed")]
+    Killed,
     /// The tool could not be started, or the store failed: our fault, retried.
     #[error("media_unavailable")]
     Unavailable,
@@ -91,12 +100,13 @@ impl MediaError {
             Self::Deadline => "media_deadline",
             Self::CpuLimit => "media_cpu_limit",
             Self::OutputLimit => "media_output_limit",
+            Self::Killed => "media_killed",
             Self::Unavailable => "media_unavailable",
         }
     }
 
     /// Whether trying again could succeed (the recording itself is not at fault).
     pub fn is_transient(self) -> bool {
-        matches!(self, Self::Unavailable)
+        matches!(self, Self::Unavailable | Self::Killed)
     }
 }

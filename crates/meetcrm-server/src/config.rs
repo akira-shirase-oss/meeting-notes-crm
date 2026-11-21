@@ -106,7 +106,7 @@ pub const VARIABLES: &[(&str, &str, &str)] = &[
         "the pinned ffmpeg and ffprobe",
     ),
     ("MEETCRM_PRLIMIT", "/usr/bin/prlimit", "util-linux prlimit"),
-    ("MEETCRM_TRANSCRIBER", "recorded", "recorded or hosted"),
+    ("MEETCRM_TRANSCRIBER", "hosted", "hosted or recorded"),
     (
         "MEETCRM_RECORDED_DIR",
         "/var/lib/meetcrm/recorded",
@@ -121,6 +121,21 @@ pub const VARIABLES: &[(&str, &str, &str)] = &[
     ("MEETCRM_UPLOAD_TIMEOUT_S", "1800", "10..=7200"),
     ("MEETCRM_UPLOAD_IDLE_MS", "30000", "100..=600000"),
     ("MEETCRM_UPLOADS_AT_ONCE", "4", "1..=64"),
+    ("MEETCRM_UPLOADS_PER_WORKSPACE", "2", "1..=64"),
+    ("MEETCRM_UPLOADS_PER_USER", "1", "1..=64"),
+    ("MEETCRM_UPLOAD_MIN_BYTES_PER_S", "16384", "1..=104857600"),
+    ("MEETCRM_UPLOAD_GRACE_S", "10", "1..=600"),
+    ("MEETCRM_WORKSPACE_MAX_MEETINGS", "10000", "1..=10000000"),
+    (
+        "MEETCRM_WORKSPACE_MAX_MEDIA_BYTES",
+        "2147483648",
+        "1024..=1099511627776",
+    ),
+    (
+        "MEETCRM_MEDIA_MAX_MEMORY_BYTES",
+        "536870912",
+        "67108864..=4294967296",
+    ),
     ("MEETCRM_MEDIA_MAX_DURATION_S", "14400", "1..=86400"),
     ("MEETCRM_WORKERS", "2", "1..=64"),
 ];
@@ -382,11 +397,10 @@ fn path(source: &dyn Source, name: &str, p: &mut Problems) -> PathBuf {
 }
 
 fn media(source: &dyn Source, p: &mut Problems) -> MediaConfig {
+    // The production default is the hosted provider; `recorded` is for tests and drills.
     let transcriber = match source.var("MEETCRM_TRANSCRIBER").as_deref() {
-        None | Some("recorded") => {
-            TranscriberConfig::Recorded(path(source, "MEETCRM_RECORDED_DIR", p))
-        }
-        Some("hosted") => {
+        Some("recorded") => TranscriberConfig::Recorded(path(source, "MEETCRM_RECORDED_DIR", p)),
+        None | Some("hosted") => {
             let url = source
                 .var("MEETCRM_TRANSCRIBE_URL")
                 .unwrap_or_else(|| default_of("MEETCRM_TRANSCRIBE_URL").to_owned());
@@ -404,7 +418,7 @@ fn media(source: &dyn Source, p: &mut Problems) -> MediaConfig {
             TranscriberConfig::Hosted { url, key }
         }
         Some(_) => {
-            p.0.push("MEETCRM_TRANSCRIBER must be recorded or hosted".to_owned());
+            p.0.push("MEETCRM_TRANSCRIBER must be hosted or recorded".to_owned());
             TranscriberConfig::Recorded(PathBuf::new())
         }
     };
@@ -413,15 +427,36 @@ fn media(source: &dyn Source, p: &mut Problems) -> MediaConfig {
         request_timeout: p.secs(source, "MEETCRM_UPLOAD_TIMEOUT_S", 10..=7200),
         max_body_bytes: usize::try_from(max_upload_bytes).unwrap_or(usize::MAX),
     };
+    let upload_deadline = upload.request_timeout;
     let defaults = meetcrm_meetings::Settings::default();
     let meetings = meetcrm_meetings::Settings {
         media: meetcrm_media::MediaLimits {
             max_upload_bytes,
             max_duration: p.secs(source, "MEETCRM_MEDIA_MAX_DURATION_S", 1..=86_400),
+            max_memory_bytes: p.number(
+                source,
+                "MEETCRM_MEDIA_MAX_MEMORY_BYTES",
+                67_108_864..=4_294_967_296,
+            ),
             ..defaults.media
         },
         upload_idle: p.millis(source, "MEETCRM_UPLOAD_IDLE_MS", 100..=600_000),
         uploads_at_once: p.number(source, "MEETCRM_UPLOADS_AT_ONCE", 1..=64),
+        uploads_per_workspace: p.number(source, "MEETCRM_UPLOADS_PER_WORKSPACE", 1..=64),
+        uploads_per_user: p.number(source, "MEETCRM_UPLOADS_PER_USER", 1..=64),
+        upload_min_bytes_per_s: p.number(source, "MEETCRM_UPLOAD_MIN_BYTES_PER_S", 1..=104_857_600),
+        upload_grace: p.secs(source, "MEETCRM_UPLOAD_GRACE_S", 1..=600),
+        upload_deadline,
+        max_meetings_per_workspace: p.number(
+            source,
+            "MEETCRM_WORKSPACE_MAX_MEETINGS",
+            1..=10_000_000,
+        ),
+        max_media_bytes_per_workspace: p.number(
+            source,
+            "MEETCRM_WORKSPACE_MAX_MEDIA_BYTES",
+            1024..=1_099_511_627_776,
+        ),
         workers: p.number(source, "MEETCRM_WORKERS", 1..=64),
         ..defaults
     };
@@ -609,10 +644,77 @@ mod tests {
     use super::*;
 
     fn base() -> BTreeMap<&'static str, &'static str> {
-        BTreeMap::from([(
-            "MEETCRM_DATABASE_URL",
-            "postgres://meetcrm_app:pw@127.0.0.1:63632/app",
-        )])
+        BTreeMap::from([
+            (
+                "MEETCRM_DATABASE_URL",
+                "postgres://meetcrm_app:pw@127.0.0.1:63632/app",
+            ),
+            ("MEETCRM_TRANSCRIBE_KEY", "provider-key-value"),
+        ])
+    }
+
+    #[test]
+    fn the_production_default_transcriber_is_the_hosted_provider_not_the_test_one() {
+        let mut unkeyed = base();
+        unkeyed.remove("MEETCRM_TRANSCRIBE_KEY");
+        let problems = Config::load(&unkeyed).unwrap_err();
+        assert!(
+            problems.iter().any(|p| p.contains("transcribe-key")),
+            "{problems:?}"
+        );
+        let config = Config::load(&base()).unwrap();
+        assert!(
+            matches!(config.media.transcriber, TranscriberConfig::Hosted { .. }),
+            "{:?}",
+            config.media.transcriber
+        );
+        assert!(!format!("{config:?}").contains("provider-key-value"));
+        let mut recorded = unkeyed;
+        recorded.insert("MEETCRM_TRANSCRIBER", "recorded");
+        assert!(matches!(
+            Config::load(&recorded).unwrap().media.transcriber,
+            TranscriberConfig::Recorded(_)
+        ));
+    }
+
+    #[test]
+    fn the_upload_fairness_and_plan_settings_are_read_and_bounded() {
+        let mut source = base();
+        source.extend([
+            ("MEETCRM_UPLOAD_TIMEOUT_S", "600"),
+            ("MEETCRM_UPLOADS_PER_WORKSPACE", "3"),
+            ("MEETCRM_UPLOADS_PER_USER", "2"),
+            ("MEETCRM_UPLOAD_MIN_BYTES_PER_S", "4096"),
+            ("MEETCRM_UPLOAD_GRACE_S", "20"),
+            ("MEETCRM_WORKSPACE_MAX_MEETINGS", "500"),
+            ("MEETCRM_WORKSPACE_MAX_MEDIA_BYTES", "1073741824"),
+            ("MEETCRM_MEDIA_MAX_MEMORY_BYTES", "268435456"),
+        ]);
+        let m = Config::load(&source).unwrap().media.meetings;
+        assert_eq!(m.uploads_per_workspace, 3);
+        assert_eq!(m.uploads_per_user, 2);
+        assert_eq!(m.upload_min_bytes_per_s, 4096);
+        assert_eq!(m.upload_grace, Duration::from_secs(20));
+        assert_eq!(m.upload_deadline, Duration::from_secs(600));
+        assert_eq!(m.max_meetings_per_workspace, 500);
+        assert_eq!(m.max_media_bytes_per_workspace, 1_073_741_824);
+        assert_eq!(m.media.max_memory_bytes, 268_435_456);
+        source.extend([
+            ("MEETCRM_UPLOADS_PER_USER", "0"),
+            ("MEETCRM_UPLOAD_MIN_BYTES_PER_S", "0"),
+            ("MEETCRM_WORKSPACE_MAX_MEDIA_BYTES", "10"),
+        ]);
+        let problems = Config::load(&source).unwrap_err();
+        for name in [
+            "MEETCRM_UPLOADS_PER_USER",
+            "MEETCRM_UPLOAD_MIN_BYTES_PER_S",
+            "MEETCRM_WORKSPACE_MAX_MEDIA_BYTES",
+        ] {
+            assert!(
+                problems.iter().any(|p| p.contains(name)),
+                "{name}: {problems:?}"
+            );
+        }
     }
 
     #[test]
@@ -664,7 +766,10 @@ mod tests {
         let file_text = file.to_string_lossy().into_owned();
         let dir_text = dir.to_string_lossy().into_owned();
         // A _FILE path must be owner-only...
-        let by_path = BTreeMap::from([("MEETCRM_DATABASE_URL_FILE", file_text.as_str())]);
+        let by_path = BTreeMap::from([
+            ("MEETCRM_DATABASE_URL_FILE", file_text.as_str()),
+            ("MEETCRM_TRANSCRIBER", "recorded"),
+        ]);
         let open = Config::load(&by_path).unwrap_err();
         assert!(
             open.iter().any(|p| p.contains("readable by others")),
@@ -680,6 +785,7 @@ mod tests {
         let credential = BTreeMap::from([
             ("CREDENTIALS_DIRECTORY", dir_text.as_str()),
             ("MEETCRM_DATABASE_URL", "postgres://ignored@127.0.0.1/app"),
+            ("MEETCRM_TRANSCRIBER", "recorded"),
         ]);
         assert_eq!(
             Config::load(&credential).unwrap().database_url.expose(),

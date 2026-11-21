@@ -3,7 +3,8 @@
 //! whole pipeline and comes back as a speaker-labelled transcript. The recorded provider's
 //! answers are built from the script's own timings, chunk by chunk, after the pinned ffmpeg
 //! has cut the call: what a diarising provider returns, with the script as ground truth.
-//! Skipped, with a notice, when `MEETCRM_ROLEPLAY_DIR` is unset (CI sets it).
+//! Skipped, with a notice, when `MEETCRM_ROLEPLAY_DIR` is unset on a developer's machine;
+//! under CI (`CI` set) an unset directory fails the test, so a skip never passes there.
 
 mod common;
 
@@ -25,6 +26,10 @@ struct Line {
 #[tokio::test]
 async fn a_thirty_minute_role_played_call_becomes_a_speaker_labelled_transcript() {
     let Some(dir) = std::env::var_os("MEETCRM_ROLEPLAY_DIR") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "MEETCRM_ROLEPLAY_DIR is unset under CI: the M1 exit test would be skipped"
+        );
         eprintln!(
             "notice: MEETCRM_ROLEPLAY_DIR is unset; run scripts/make-roleplay.sh and point it at the output to run this test"
         );

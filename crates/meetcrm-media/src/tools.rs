@@ -1,7 +1,9 @@
 //! ffprobe and ffmpeg, run with bounds. The program and every argument go to `execve` as a
 //! vector: no shell sees them, and every path is one the store built from ids. Each run is
-//! wrapped in `prlimit` (CPU seconds, largest file written, open files, no core dumps) with
-//! a cleared environment and no stdin; a wall-clock deadline kills it; only the `file`
+//! wrapped in `prlimit` (CPU seconds, address space, largest file written, open files, no
+//! core dumps) with a cleared environment (but for one malloc arena, so the address-space
+//! cap is not spent on per-thread arenas) and no stdin; ffmpeg runs one thread per stage and
+//! both tools read at most [`PROBE_BYTES`] / [`PROBE_MICROS`] to identify a stream; a wall-clock deadline kills it; only the `file`
 //! protocol and [`DEMUXERS`] are allowed, so a crafted container cannot open a socket or
 //! a file it names.
 
@@ -20,6 +22,11 @@ use crate::{MediaError, MediaLimits};
 const SIGXCPU: i32 = 24;
 const SIGXFSZ: i32 = 25;
 const SIGKILL: i32 = 9;
+
+/// The most bytes either tool reads to identify a stream (`-probesize`).
+pub const PROBE_BYTES: &str = "5000000";
+/// The most stream time either tool reads to identify a stream (`-analyzeduration`, µs).
+pub const PROBE_MICROS: &str = "10000000";
 
 /// The sample rate chunks are transcoded to: what hosted speech models expect.
 pub const CHUNK_SAMPLE_RATE: u32 = 16_000;
@@ -54,6 +61,10 @@ impl Tools {
         let mut args: Vec<OsString> = [
             "-v",
             "quiet",
+            "-probesize",
+            PROBE_BYTES, // LIMIT(probe-size)
+            "-analyzeduration",
+            PROBE_MICROS,
             "-protocol_whitelist",
             "file",
             "-format_whitelist",
@@ -68,13 +79,7 @@ impl Tools {
         .collect();
         args.push(file_url(input));
         let out = self
-            .run(
-                &self.ffprobe,
-                &args,
-                limits.probe_deadline,
-                limits.cpu_seconds,
-                0,
-            )
+            .run(&self.ffprobe, &args, limits.probe_deadline, limits, 0)
             .await?;
         probe::parse(&out, limits.max_duration)
     }
@@ -88,25 +93,8 @@ impl Tools {
         out_dir: &Path,
         limits: &MediaLimits,
     ) -> Result<Vec<Chunk>, MediaError> {
-        let mut args: Vec<OsString> = Vec::with_capacity(40);
-        let max_seconds = limits.max_duration.as_secs().to_string();
+        let mut args = input_args(input, limits);
         let chunk_seconds = limits.chunk.as_secs().max(1).to_string();
-        for a in [
-            "-nostdin",
-            "-hide_banner",
-            "-v",
-            "quiet",
-            "-protocol_whitelist",
-            "file",
-            "-format_whitelist",
-            DEMUXERS,
-            "-t",
-            &max_seconds,
-            "-i",
-        ] {
-            args.push(a.into());
-        }
-        args.push(file_url(input));
         for a in [
             "-map",
             "0:a:0",
@@ -115,6 +103,8 @@ impl Tools {
             "-dn",
             "-map_metadata",
             "-1",
+            "-threads",
+            "1",
             "-ac",
             "1",
             "-ar",
@@ -139,7 +129,7 @@ impl Tools {
             &self.ffmpeg,
             &args,
             limits.transcode_deadline,
-            limits.cpu_seconds,
+            limits,
             limits.max_output_bytes,
         )
         .await?;
@@ -190,12 +180,16 @@ impl Tools {
         program: &Path,
         args: &[OsString],
         deadline: Duration,
-        cpu_seconds: u64,
+        limits: &MediaLimits,
         fsize: u64,
     ) -> Result<Vec<u8>, MediaError> {
+        let cpu = limits.cpu_seconds.max(1);
         let mut command = Command::new(&self.prlimit);
         command
-            .arg(format!("--cpu={}", cpu_seconds.max(1))) // LIMIT(ffmpeg-cpu)
+            // The soft cap sends SIGXCPU (reported as the CPU cap); the hard one, a second
+            // later, SIGKILLs a tool that ignores it. A SIGKILL is otherwise not ours.
+            .arg(format!("--cpu={cpu}:{}", cpu + 1)) // LIMIT(ffmpeg-cpu)
+            .arg(format!("--as={}", limits.max_memory_bytes)) // LIMIT(ffmpeg-memory)
             .arg(format!("--fsize={fsize}")) // LIMIT(ffmpeg-output)
             .arg("--nofile=64")
             .arg("--core=0")
@@ -203,6 +197,8 @@ impl Tools {
             .arg(program)
             .args(args)
             .env_clear()
+            .env("MALLOC_ARENA_MAX", "1")
+            .env("GLIBC_TUNABLES", "glibc.malloc.arena_max=1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -239,7 +235,8 @@ impl Tools {
         };
         match (status.code(), status.signal()) {
             (Some(0), _) => Ok(out),
-            (_, Some(SIGXCPU | SIGKILL)) if status.code().is_none() => Err(MediaError::CpuLimit),
+            (None, Some(SIGXCPU)) => Err(MediaError::CpuLimit),
+            (None, Some(SIGKILL)) => Err(MediaError::Killed),
             (_, Some(SIGXFSZ)) => Err(MediaError::OutputLimit),
             // prlimit itself failing to exec the tool is our fault, not the file's.
             (Some(126 | 127), _) => Err(MediaError::Unavailable),
@@ -300,6 +297,38 @@ fn file_url(path: &Path) -> OsString {
     let mut url = OsString::from("file:");
     url.push(path.as_os_str());
     url
+}
+
+/// ffmpeg's arguments up to and including its input: single-threaded, bounded probing,
+/// files only, the demuxer allowlist, and never reading past the duration cap.
+fn input_args(input: &Path, limits: &MediaLimits) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::with_capacity(40);
+    let max_seconds = limits.max_duration.as_secs().to_string();
+    for a in [
+        "-nostdin",
+        "-hide_banner",
+        "-v",
+        "quiet",
+        "-threads",
+        "1", // LIMIT(ffmpeg-threads)
+        "-filter_threads",
+        "1",
+        "-probesize",
+        PROBE_BYTES,
+        "-analyzeduration",
+        PROBE_MICROS,
+        "-protocol_whitelist",
+        "file",
+        "-format_whitelist",
+        DEMUXERS,
+        "-t",
+        &max_seconds,
+        "-i",
+    ] {
+        args.push(a.into());
+    }
+    args.push(file_url(input));
+    args
 }
 
 #[cfg(test)]

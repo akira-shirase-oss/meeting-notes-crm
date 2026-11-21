@@ -206,3 +206,42 @@ async fn consent_must_name_its_statement_and_participants() {
     let refused = kit.upload(&ana, meeting, common::tone(1)).await;
     assert_eq!(refused.code(), Some("consent_required"), "{}", refused.body);
 }
+
+// The policy table's write actions, per role: every member records (creates a meeting,
+// attests consent, uploads, deletes its own); only an owner or admin deletes another's.
+// Each refusal is re-read: the meeting is still there.
+#[tokio::test]
+async fn every_role_records_and_only_owners_and_admins_delete_anothers_meeting() {
+    let kit = Kit::new().await;
+    let owner = kit.person("own@example.test").await;
+    let admin = kit.join(&owner, "adm@example.test", "admin").await;
+    let member = kit.join(&owner, "mem@example.test", "member").await;
+    let path = |m: uuid::Uuid| format!("/v1/workspaces/{}/meetings/{m}", owner.workspace);
+    for who in [&owner, &admin, &member] {
+        let meeting = kit.meeting(who).await;
+        kit.consent(who, meeting).await;
+        let up = kit.upload(who, meeting, common::tone(1)).await;
+        assert_eq!(up.status, StatusCode::ACCEPTED, "{}", up.body);
+        let gone = kit
+            .call(Method::DELETE, &path(meeting), Some(&who.session), None)
+            .await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+    }
+    let owners = kit.meeting(&owner).await;
+    let refused = kit
+        .call(Method::DELETE, &path(owners), Some(&member.session), None)
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert_eq!(kit.show(&owner, owners).await.status, StatusCode::OK);
+    for who in [&admin, &owner] {
+        let members = kit.meeting(&member).await;
+        let gone = kit
+            .call(Method::DELETE, &path(members), Some(&who.session), None)
+            .await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+        assert_eq!(
+            kit.show(&member, members).await.status,
+            StatusCode::NOT_FOUND
+        );
+    }
+}

@@ -71,7 +71,7 @@ impl Meetings {
                         Ok(Outcome::Idle) => true,
                         Ok(_) => false,
                         Err(e) => {
-                            tracing::warn!(error = %e, "pipeline job failed");
+                            tracing::warn!(error = %e, cause = ?e, "pipeline step failed");
                             true
                         }
                     };
@@ -87,7 +87,11 @@ impl Meetings {
                 }
             });
         }
-        while set.join_next().await.is_some() {}
+        while let Some(ended) = set.join_next().await {
+            if let Err(e) = ended {
+                tracing::error!(error = %e, "a pipeline worker ended abnormally");
+            }
+        }
     }
 
     /// Claims one due job (or one whose lease ran out) and runs it.
@@ -97,10 +101,24 @@ impl Meetings {
             return Ok(Outcome::Idle);
         };
         let _heartbeat = self.heartbeat(job.id, job.lease);
-        match job.stage.as_str() {
+        let outcome = match job.stage.as_str() {
             "transcode" => self.transcode(&job).await,
             _ => self.transcribe(&job).await,
+        };
+        match &outcome {
+            Err(e) => tracing::warn!(
+                job = %job.id, meeting = %job.meeting, stage = %job.stage,
+                attempt = job.attempts, error = %e, cause = ?e, "pipeline job failed"
+            ),
+            Ok(Outcome::Retrying(code) | Outcome::Failed(code) | Outcome::Rejected(code)) => {
+                tracing::info!(
+                    job = %job.id, meeting = %job.meeting, stage = %job.stage,
+                    attempt = job.attempts, code, "pipeline job ended an attempt"
+                );
+            }
+            Ok(_) => {}
         }
+        outcome
     }
 
     /// Removes the files of deleted or transcribed meetings, then their garbage rows.
@@ -120,25 +138,60 @@ impl Meetings {
         Ok(removed)
     }
 
+    /// Removes one meeting's files; only once they are gone is its garbage row dropped and
+    /// its audio marked deleted.
     pub(crate) async fn sweep_one(&self, workspace: Uuid, meeting: Uuid) -> bool {
-        if self
-            .inner
-            .store
-            .remove_meeting(workspace, meeting)
-            .await
-            .is_err()
-        {
+        if let Err(e) = self.inner.store.remove_meeting(workspace, meeting).await {
+            tracing::warn!(meeting = %meeting, error = %e, "removing a meeting's media failed");
             return false;
         }
-        sqlx::query("DELETE FROM media_garbage WHERE meeting_id = $1")
+        let marked = async {
+            let mut tx = self.inner.db.begin().await?;
+            sqlx::query(
+                "UPDATE meetings SET audio_deleted_at = now() \
+                 WHERE id = $1 AND audio_deleted_at IS NULL",
+            )
             .bind(meeting)
-            .execute(&self.inner.db)
-            .await
-            .is_ok()
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM media_garbage WHERE meeting_id = $1")
+                .bind(meeting)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await
+        };
+        marked.await.is_ok()
+    }
+
+    /// Ends a meeting's media in the caller's transaction: its chunk and partial transcript
+    /// rows go, and its files are queued for removal. Every terminal failure calls it, so
+    /// no failed meeting keeps a recording. Returns the workspace to sweep.
+    async fn discard_media(
+        tx: &mut Transaction<'_, Postgres>,
+        meeting: Uuid,
+    ) -> Result<Option<Uuid>, MeetingsError> {
+        sqlx::query("DELETE FROM transcript_segments WHERE meeting_id = $1")
+            .bind(meeting)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM media_chunks WHERE meeting_id = $1")
+            .bind(meeting)
+            .execute(&mut **tx)
+            .await?;
+        let workspace = sqlx::query_scalar(
+            "INSERT INTO media_garbage (meeting_id, workspace_id) \
+             SELECT id, workspace_id FROM meetings WHERE id = $1 \
+             ON CONFLICT (meeting_id) DO UPDATE SET queued_at = media_garbage.queued_at \
+             RETURNING workspace_id",
+        )
+        .bind(meeting)
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(workspace)
     }
 
     /// A job whose lease ran out on its last attempt (a worker died on it each time) is
-    /// failed rather than taken over again.
+    /// failed rather than taken over again, and its meeting's media discarded.
     async fn exhaust(&self) -> Result<(), MeetingsError> {
         let max = i32::try_from(self.inner.settings.max_attempts).unwrap_or(i32::MAX);
         let mut tx = self.inner.db.begin().await?;
@@ -151,6 +204,7 @@ impl Meetings {
         .bind(max)
         .fetch_all(&mut *tx)
         .await?;
+        let mut sweep = Vec::with_capacity(gone.len());
         for (meeting, stage) in gone {
             let status = if stage == "transcode" {
                 "media_rejected"
@@ -164,8 +218,15 @@ impl Meetings {
             .bind(status)
             .execute(&mut *tx)
             .await?;
+            tracing::warn!(meeting = %meeting, stage = %stage, "pipeline job ran out of attempts");
+            if let Some(workspace) = Self::discard_media(&mut tx, meeting).await? {
+                sweep.push((workspace, meeting));
+            }
         }
         tx.commit().await?;
+        for (workspace, meeting) in sweep {
+            self.sweep_one(workspace, meeting).await;
+        }
         Ok(())
     }
 
@@ -239,22 +300,28 @@ impl Meetings {
         Ok(held.is_some())
     }
 
+    /// The delay before retry `attempts`: doubled per attempt up to `retry_max`, then a
+    /// random half of it taken off, so jobs failed together are not retried together.
     fn backoff(&self, attempts: i32) -> Duration {
         let s = &self.inner.settings;
         let doublings = u32::try_from(attempts.saturating_sub(1))
             .unwrap_or(0)
             .min(16);
-        s.retry_base.saturating_mul(1 << doublings).min(s.retry_max)
+        let full = s.retry_base.saturating_mul(1 << doublings).min(s.retry_max);
+        let random = Uuid::new_v4().as_bytes()[0];
+        full.mul_f64(0.5 + f64::from(random) / 510.0)
     }
 
     /// Ends an attempt that failed: queued again after a backoff while attempts remain and
-    /// the failure is transient, otherwise failed, with the meeting showing `status`.
+    /// the failure is transient (the meeting shows `retry_status`), otherwise failed (the
+    /// meeting shows `fail_status` and its media is discarded).
     async fn give_up_or_retry(
         &self,
         job: &Job,
         code: &'static str,
         transient: bool,
-        status: &'static str,
+        retry_status: &'static str,
+        fail_status: &'static str,
     ) -> Result<Outcome, MeetingsError> {
         let retry = transient
             && u32::try_from(job.attempts).unwrap_or(u32::MAX) < self.inner.settings.max_attempts; // LIMIT(job-attempts)
@@ -262,6 +329,7 @@ impl Meetings {
         if !Self::hold(&mut tx, job).await? {
             return Ok(Outcome::LostLease);
         }
+        let mut sweep = None;
         if retry {
             sqlx::query(
                 "UPDATE jobs SET state = 'queued', lease = NULL, lease_until = NULL, \
@@ -281,14 +349,18 @@ impl Meetings {
             .bind(code)
             .execute(&mut *tx)
             .await?;
+            sweep = Self::discard_media(&mut tx, job.meeting).await?;
         }
         sqlx::query("UPDATE meetings SET status = $2, status_reason = $3 WHERE id = $1")
             .bind(job.meeting)
-            .bind(status)
+            .bind(if retry { retry_status } else { fail_status })
             .bind(code)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        if let Some(workspace) = sweep {
+            self.sweep_one(workspace, job.meeting).await;
+        }
         Ok(if retry {
             Outcome::Retrying(code)
         } else {
@@ -300,6 +372,20 @@ impl Meetings {
         let store = &self.inner.store;
         let staging = store.staging().await?;
         let original = store.original(job.workspace, job.meeting);
+        if matches!(tokio::fs::try_exists(&original).await, Ok(false)) {
+            // Its upload committed but the process died (or placing failed) before the
+            // original was placed: there is nothing to transcode.
+            staging.discard().await;
+            return self
+                .give_up_or_retry(
+                    job,
+                    "media_missing",
+                    false,
+                    "transcoding",
+                    "media_unavailable",
+                )
+                .await;
+        }
         let chunks = match self
             .inner
             .tools
@@ -310,17 +396,16 @@ impl Meetings {
             Err(e) if e.is_transient() => {
                 staging.discard().await;
                 return self
-                    .give_up_or_retry(job, e.code(), true, "transcoding")
+                    .give_up_or_retry(job, e.code(), true, "transcoding", "media_unavailable")
                     .await;
             }
             Err(e) => {
                 staging.discard().await;
                 // Refused: nothing of the recording is kept.
                 let outcome = self
-                    .give_up_or_retry(job, e.code(), false, "media_rejected")
+                    .give_up_or_retry(job, e.code(), false, "media_rejected", "media_rejected")
                     .await?;
                 if outcome != Outcome::LostLease {
-                    let _ = store.remove_meeting(job.workspace, job.meeting).await;
                     return Ok(Outcome::Rejected(e.code()));
                 }
                 return Ok(outcome);
@@ -335,19 +420,7 @@ impl Meetings {
             .bind(job.meeting)
             .execute(&mut *tx)
             .await?;
-        let mut idx = Vec::with_capacity(chunks.len());
-        let mut offsets = Vec::with_capacity(chunks.len());
-        let mut durations = Vec::with_capacity(chunks.len());
-        for c in &chunks {
-            idx.push(i32::try_from(c.index).map_err(|_| MeetingsError::internal("chunk index"))?);
-            offsets.push(
-                i64::try_from(c.offset_ms).map_err(|_| MeetingsError::internal("chunk offset"))?,
-            );
-            durations.push(
-                i64::try_from(c.duration_ms)
-                    .map_err(|_| MeetingsError::internal("chunk length"))?,
-            );
-        }
+        let (idx, offsets, durations) = chunk_columns(&chunks)?;
         sqlx::query(
             "INSERT INTO media_chunks (meeting_id, idx, offset_ms, duration_ms) \
              SELECT $1, * FROM UNNEST($2::int[], $3::bigint[], $4::bigint[])",
@@ -358,12 +431,14 @@ impl Meetings {
         .bind(&durations)
         .execute(&mut *tx)
         .await?;
+        // The meeting's length is what the chunks measured, not what the container claimed.
         sqlx::query(
-            "UPDATE meetings SET status = 'transcribing', status_reason = NULL, chunk_count = $2 \
-             WHERE id = $1",
+            "UPDATE meetings SET status = 'transcribing', status_reason = NULL, chunk_count = $2, \
+             duration_ms = $3 WHERE id = $1",
         )
         .bind(job.meeting)
         .bind(i32::try_from(chunks.len()).map_err(|_| MeetingsError::internal("chunk count"))?)
+        .bind(durations.iter().copied().fold(0i64, i64::saturating_add))
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -426,6 +501,7 @@ impl Meetings {
                             e.code(),
                             e.is_transient(),
                             "transcription_unavailable",
+                            "transcription_unavailable",
                         )
                         .await;
                 }
@@ -446,7 +522,7 @@ impl Meetings {
         }
         sqlx::query(
             "UPDATE meetings SET status = 'transcribed', status_reason = NULL, \
-             transcribed_at = now(), audio_deleted_at = now() WHERE id = $1",
+             transcribed_at = now() WHERE id = $1",
         )
         .bind(job.meeting)
         .execute(&mut *tx)
@@ -457,7 +533,8 @@ impl Meetings {
         .bind(job.id)
         .execute(&mut *tx)
         .await?;
-        // Audio is deleted once transcribed: queued here, removed by the sweep.
+        // Audio is deleted once transcribed: queued here, removed (and only then marked
+        // deleted) by the sweep.
         sqlx::query(
             "INSERT INTO media_garbage (meeting_id, workspace_id) VALUES ($1, $2) \
              ON CONFLICT (meeting_id) DO NOTHING",
@@ -524,4 +601,23 @@ impl Meetings {
         tx.commit().await?;
         Ok(true)
     }
+}
+
+/// Indexes, offsets and measured lengths, as `media_chunks` columns.
+type ChunkColumns = (Vec<i32>, Vec<i64>, Vec<i64>);
+
+/// The chunks as the `media_chunks` columns.
+fn chunk_columns(chunks: &[meetcrm_media::tools::Chunk]) -> Result<ChunkColumns, MeetingsError> {
+    let mut idx = Vec::with_capacity(chunks.len());
+    let mut offsets = Vec::with_capacity(chunks.len());
+    let mut durations = Vec::with_capacity(chunks.len());
+    for c in chunks {
+        idx.push(i32::try_from(c.index).map_err(|_| MeetingsError::internal("chunk index"))?);
+        offsets
+            .push(i64::try_from(c.offset_ms).map_err(|_| MeetingsError::internal("chunk offset"))?);
+        durations.push(
+            i64::try_from(c.duration_ms).map_err(|_| MeetingsError::internal("chunk length"))?,
+        );
+    }
+    Ok((idx, offsets, durations))
 }

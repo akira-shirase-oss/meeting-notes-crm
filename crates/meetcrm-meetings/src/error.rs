@@ -28,6 +28,9 @@ pub enum MeetingsError {
     /// The client stopped sending the body (408).
     #[error("upload stalled")]
     Stalled,
+    /// The body arrived slower than the minimum rate (408).
+    #[error("upload too slow")]
+    TooSlow,
 }
 
 impl From<sqlx::Error> for MeetingsError {
@@ -86,6 +89,11 @@ impl IntoResponse for MeetingsError {
                 "upload_stalled",
                 "the upload stopped sending",
             ),
+            Self::TooSlow => error(
+                S::REQUEST_TIMEOUT,
+                "upload_too_slow",
+                "the upload arrived slower than the minimum rate",
+            ),
         }
     }
 }
@@ -107,6 +115,7 @@ fn media_message(e: MediaError) -> &'static str {
         MediaError::TooLong => "the recording is longer than allowed",
         MediaError::Deadline => "processing the recording took too long",
         MediaError::CpuLimit => "processing the recording used too much CPU",
+        MediaError::Killed => "processing the recording was interrupted",
         MediaError::OutputLimit => "the recording would produce too much audio",
         MediaError::TooLarge | MediaError::Unavailable => "media refused",
     }

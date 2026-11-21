@@ -138,7 +138,8 @@ async fn provider_failures_become_typed_errors() {
         (StatusCode::TOO_MANY_REQUESTS, TranscribeError::RateLimited),
         (StatusCode::PAYMENT_REQUIRED, TranscribeError::RateLimited),
         (StatusCode::BAD_REQUEST, TranscribeError::Rejected),
-        (StatusCode::UNAUTHORIZED, TranscribeError::Rejected),
+        (StatusCode::UNAUTHORIZED, TranscribeError::Unauthorized),
+        (StatusCode::FORBIDDEN, TranscribeError::Unauthorized),
     ];
     for (status, want) in cases {
         let (addr, _) = provider(status, b"{}".to_vec(), Duration::ZERO).await;
@@ -282,4 +283,45 @@ async fn the_recorded_adapter_replays_answers_and_scripted_faults_in_order() {
     );
     assert_eq!(recorded.calls(), 5);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// A key being rotated, or an account briefly suspended, is ours to fix: retried, not a
+// verdict on the recording.
+#[test]
+fn a_refused_key_is_retried_and_a_refused_recording_is_not() {
+    assert!(TranscribeError::Unauthorized.is_transient());
+    assert_eq!(
+        TranscribeError::Unauthorized.code(),
+        "provider_unauthorized"
+    );
+    assert!(!TranscribeError::Rejected.is_transient());
+}
+
+// A connection cut while the answer is read is the network's failure, retried; only an
+// answer that arrived and broke a bound is malformed.
+#[tokio::test]
+async fn an_answer_cut_off_mid_body_is_unavailable_not_malformed() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !seen.ends_with(b"fLaC not really audio") {
+            let n = stream.read(&mut buf).await.unwrap();
+            if n == 0 {
+                return;
+            }
+            seen.extend_from_slice(&buf[..n]);
+        }
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1000\r\n\r\n{\"metadata\"")
+            .await;
+        let _ = stream.shutdown().await;
+    });
+    assert_eq!(
+        ask(addr, Duration::from_secs(10)).await,
+        Err(TranscribeError::Unavailable)
+    );
 }

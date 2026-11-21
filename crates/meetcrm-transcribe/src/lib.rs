@@ -51,6 +51,10 @@ pub enum TranscribeError {
     /// No answer within the deadline.
     #[error("provider_timeout")]
     Timeout,
+    /// The provider refused our key (401, 403): ours to fix (a rotated key, a suspended
+    /// account), so retried with backoff rather than failing the recording at once.
+    #[error("provider_unauthorized")]
+    Unauthorized,
     /// The provider refused this audio (another 4xx): trying again will not help.
     #[error("provider_rejected")]
     Rejected,
@@ -69,6 +73,7 @@ impl TranscribeError {
             Self::Unavailable => "provider_unavailable",
             Self::RateLimited => "provider_rate_limited",
             Self::Timeout => "provider_timeout",
+            Self::Unauthorized => "provider_unauthorized",
             Self::Rejected => "provider_rejected",
             Self::Malformed => "provider_malformed",
             Self::Partial => "provider_partial",
@@ -79,7 +84,11 @@ impl TranscribeError {
     pub fn is_transient(self) -> bool {
         matches!(
             self,
-            Self::Unavailable | Self::RateLimited | Self::Timeout | Self::Partial
+            Self::Unavailable
+                | Self::RateLimited
+                | Self::Timeout
+                | Self::Partial
+                | Self::Unauthorized
         )
     }
 }

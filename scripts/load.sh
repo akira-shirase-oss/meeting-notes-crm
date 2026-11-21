@@ -4,7 +4,8 @@
 # 1,000,000 requests, results with machine and commit, misses kept).
 #
 #   MODE=smoke scripts/load.sh        100,000 requests
-#   SCENARIO=meetings scripts/load.sh M1 reviewers reading meetings and transcripts
+#   SCENARIO=meetings scripts/load.sh M1 reviewers reading meetings and transcripts while
+#                                     recorders upload, transcode and transcribe new ones
 #                                     (perf/scenarios/meetings.js; default: service)
 #   MODE=full  scripts/load.sh        1,000,000 requests: only on a quiet machine
 #   scripts/load.sh --setup-only      build, set up, seed and check, offer no load
@@ -62,6 +63,7 @@ MEETCRM_DATABASE_URL="$(role_url meetcrm_app "$APP_PW" "$db")" MEETCRM_LISTEN="1
   MEETCRM_SMTP_RELAY="127.0.0.1:$sink_port" MEETCRM_PUBLIC_URL="$base" MEETCRM_COOKIE_SECURE=false \
   MEETCRM_MEDIA_DIR="$work/media" MEETCRM_FFMPEG_DIR="$PWD/target/tools/bin" MEETCRM_PRLIMIT="$(command -v prlimit)" \
   MEETCRM_TRANSCRIBER=recorded MEETCRM_RECORDED_DIR="$work/recorded" \
+  MEETCRM_UPLOADS_PER_WORKSPACE=4 MEETCRM_UPLOADS_PER_USER=4 \
   MEETCRM_LOG=warn MEETCRM_MAX_IN_FLIGHT="${MAX_IN_FLIGHT:-256}" target/release/meetcrm-server >"$work/server.log" 2>&1 &
 server=$!
 pids+=($server)
@@ -106,7 +108,10 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 summary="$work/summary.json"
 load_before="$(uptime | sed 's/.*load averages*: *//')"
 set +e
-BASE_URL="$base" TOKEN="$token" WORKSPACE="$workspace" MEETING="$meeting" MODE="$mode" RATE="$rate" TOTAL="${TOTAL:-}" \
+# The member's session cookie, for the recorders' writes (curl marks it #HttpOnly_).
+cookie="$(awk -F'\t' '(/^#HttpOnly_/ || !/^#/) && NF >= 7 {c = $6 "=" $7} END {print c}' "$work/cookies")"
+BASE_URL="$base" TOKEN="$token" COOKIE="$cookie" WORKSPACE="$workspace" MEETING="$meeting" \
+  AUDIO="$work/call.wav" MODE="$mode" RATE="$rate" TOTAL="${TOTAL:-}" RECORDINGS="${RECORDINGS:-}" \
   k6 run --quiet --summary-export "$summary" "perf/scenarios/$scenario.js"
 k6_status=$?
 set -e
@@ -136,7 +141,7 @@ jq -n --arg mode "$mode" --arg stamp "$stamp" --arg commit "$commit" --argjson d
                load_average_before: $load_before, load_average_after: $load_after, busy_machine: $busy,
                note: "same-machine load generator: a development observation, not capacity" },
     offered_rate_per_second: $rate,
-    mix: (if $scenario == "meetings" then "64 reviewers: 50% meeting lists, 25% a meeting, 25% transcript pages" else "90% token-authenticated workspace reads, 10% /livez" end),
+    mix: (if $scenario == "meetings" then "64 reviewers: 50% meeting lists, 25% a meeting, 25% transcript pages; 4 recorders: create, consent, upload, transcode, transcribe, read, delete" else "90% token-authenticated workspace reads, 10% /livez" end),
     thresholds_passed: ($k6_status == 0), k6_exit_status: $k6_status,
     requests: $summary[0].metrics.http_reqs.count,
     requests_per_second: $summary[0].metrics.http_reqs.rate,

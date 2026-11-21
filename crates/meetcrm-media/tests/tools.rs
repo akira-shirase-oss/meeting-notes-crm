@@ -2,6 +2,7 @@
 //! tools that hang or spin, for the caps.
 #![expect(clippy::unwrap_used, reason = "integration test helpers")]
 
+use std::fmt::Write as _;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -293,5 +294,108 @@ async fn a_missing_tool_is_our_fault_not_the_recordings() {
         tools.probe(&input, &MediaLimits::default()).await,
         Err(MediaError::Unavailable)
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Attack: a crafted stream that makes the demuxer or decoder allocate without bound. The
+// stand-in plays that file: it reserves 1 GiB and then hands over to the real ffprobe, so
+// without the address-space cap the "recording" is accepted; with it the tool fails to
+// allocate and the recording is refused instead of pushing the service into reclaim.
+#[tokio::test]
+async fn a_recording_that_makes_the_tool_allocate_without_bound_is_refused_at_the_memory_cap() {
+    let dir = scratch();
+    let input = tone(&dir, "in.wav", 1);
+    let real = bin_dir().join("ffprobe");
+    let greedy = fake_tool(
+        &dir,
+        "ffprobe",
+        &format!(
+            "/usr/bin/python3 -c 'b = bytearray(1 << 30); b[-1] = 1' || exit 1\nexec '{}' \"$@\"",
+            real.display()
+        ),
+    );
+    let tools = Tools {
+        ffprobe: greedy,
+        ..tools()
+    };
+    let limits = MediaLimits {
+        probe_deadline: Duration::from_secs(60),
+        ..MediaLimits::default()
+    };
+    assert_eq!(
+        tools.probe(&input, &limits).await.map(|p| p.duration_ms),
+        Err(MediaError::Corrupt)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A stand-in for `name` that runs the real tool only when every `required` argument pair
+/// is on its command line, and otherwise fails as a refused file would.
+fn insisting_tool(dir: &Path, name: &str, required: &[(&str, &str)]) -> PathBuf {
+    let mut body = String::from("prev=''\nseen=''\nfor a in \"$@\"; do\n  case \"$prev $a\" in\n");
+    for (i, (flag, value)) in required.iter().enumerate() {
+        let _ = writeln!(body, "    '{flag} {value}') seen=\"$seen {i}\" ;;");
+    }
+    body.push_str("  esac\n  prev=\"$a\"\ndone\n");
+    for i in 0..required.len() {
+        let _ = writeln!(body, "case \"$seen \" in *' {i} '*) ;; *) exit 3 ;; esac");
+    }
+    let _ = write!(body, "exec '{}' \"$@\"", bin_dir().join(name).display());
+    fake_tool(dir, name, &body)
+}
+
+#[tokio::test]
+async fn the_tools_run_single_threaded_with_bounded_probing() {
+    let dir = scratch();
+    let input = tone(&dir, "in.wav", 3);
+    let probing = [("-probesize", "5000000"), ("-analyzeduration", "10000000")];
+    let tools = Tools {
+        ffprobe: insisting_tool(&dir, "ffprobe", &probing),
+        ffmpeg: insisting_tool(
+            &dir,
+            "ffmpeg",
+            &[
+                probing[0],
+                probing[1],
+                ("-threads", "1"),
+                ("-filter_threads", "1"),
+            ],
+        ),
+        ..tools()
+    };
+    let limits = MediaLimits {
+        chunk: Duration::from_secs(2),
+        ..MediaLimits::default()
+    };
+    assert_eq!(
+        tools.probe(&input, &limits).await.unwrap().duration_ms,
+        3_000
+    );
+    let out = dir.join("chunks");
+    std::fs::create_dir(&out).unwrap();
+    assert_eq!(
+        tools.transcode(&input, &out, &limits).await.unwrap().len(),
+        2
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// A tool killed by something else (the kernel's OOM killer under memory pressure) is not
+// the recording using its CPU cap: it is reported as killed, and tried again.
+#[tokio::test]
+async fn a_tool_killed_from_outside_is_not_reported_as_its_cpu_cap() {
+    let dir = scratch();
+    let input = tone(&dir, "in.wav", 1);
+    let killed = fake_tool(&dir, "ffprobe", "kill -9 $$");
+    let tools = Tools {
+        ffprobe: killed,
+        ..tools()
+    };
+    let refused = tools
+        .probe(&input, &MediaLimits::default())
+        .await
+        .map(|p| p.duration_ms)
+        .map_err(|e| (e.code(), e.is_transient()));
+    assert_eq!(refused, Err(("media_killed", true)));
     std::fs::remove_dir_all(dir).unwrap();
 }

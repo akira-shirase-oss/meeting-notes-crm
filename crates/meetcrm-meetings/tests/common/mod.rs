@@ -175,13 +175,16 @@ impl Kit {
     ) -> Self {
         let db = TestDb::new().await;
         let sink = SmtpSink::start("127.0.0.1:0", None).await.unwrap();
+        let mut account_settings = meetcrm_accounts::Settings {
+            public_url: "https://app.example.test".to_owned(),
+            cookie_secure: false,
+            ..meetcrm_accounts::Settings::default()
+        };
+        // Every test person signs up from the one test address.
+        account_settings.mail.per_address = account_settings.mail.global;
         let accounts = Accounts::new(
             db.pool.clone(),
-            meetcrm_accounts::Settings {
-                public_url: "https://app.example.test".to_owned(),
-                cookie_secure: false,
-                ..meetcrm_accounts::Settings::default()
-            },
+            account_settings,
             Arc::new(SmtpRelay::new(sink.addr).unwrap()),
         )
         .await
@@ -288,8 +291,19 @@ impl Kit {
         self.send(request).await
     }
 
+    /// Uploads `bytes`, declaring their length as a client does.
     pub async fn upload(&self, who: &Person, meeting: Uuid, bytes: Vec<u8>) -> Answer {
-        self.upload_body(who, meeting, Body::from(bytes)).await
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri(format!(
+                "/v1/workspaces/{}/meetings/{meeting}/media",
+                who.workspace
+            ))
+            .header(header::COOKIE, format!("meetcrm_session={}", who.session))
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .body(Body::from(bytes))
+            .unwrap();
+        self.send(request).await
     }
 
     /// A verified, signed-in user with a workspace of their own.
@@ -443,6 +457,22 @@ impl Kit {
             None,
         )
         .await
+    }
+
+    /// A new user added to `owner`'s workspace with `role`, acting in it.
+    pub async fn join(&self, owner: &Person, email: &str, role: &str) -> Person {
+        let joined = self.person(email).await;
+        sqlx::query("INSERT INTO members (workspace_id, user_id, role) VALUES ($1, $2, $3)")
+            .bind(owner.workspace)
+            .bind(joined.user)
+            .bind(role)
+            .execute(&self.db.pool)
+            .await
+            .unwrap();
+        Person {
+            workspace: owner.workspace,
+            ..joined
+        }
     }
 
     /// Files in the media store, staging included.

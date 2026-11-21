@@ -59,7 +59,7 @@ start() {
   ctl "$db" migrate >/dev/null
   target/debug/examples/smtp-sink "127.0.0.1:$sink_port" "$dir/mail.log" >"$dir/sink.log" 2>&1 &
   echo $! >"$dir/sink.pid"
-  MEETCRM_DATABASE_URL="$(role_url meetcrm_app "$APP_PW" "$db")" MEETCRM_LISTEN="127.0.0.1:$port" MEETCRM_MEDIA_DIR="$PWD/target/dev-media" \
+  MEETCRM_DATABASE_URL="$(role_url meetcrm_app "$APP_PW" "$db")" MEETCRM_LISTEN="127.0.0.1:$port" MEETCRM_MEDIA_DIR="$PWD/target/dev-media" MEETCRM_TRANSCRIBER=recorded \
     MEETCRM_SMTP_RELAY="127.0.0.1:$sink_port" MEETCRM_PUBLIC_URL="$base" MEETCRM_COOKIE_SECURE=false \
     MEETCRM_LOG_FORMAT=text target/debug/meetcrm-server >"$dir/server.log" 2>&1 &
   echo $! >"$dir/server.pid"

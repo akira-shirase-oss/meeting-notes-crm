@@ -70,7 +70,10 @@ pub fn app(state: AppState) -> Router {
         .route("/errorz", get(health::errorz))
         .with_state(state.health.clone());
     let router = Router::new().nest("/v1", v1).merge(health);
-    // The upload route streams a recording: its own body cap and deadline, the same gate.
+    // The upload route streams a recording: its own body cap and deadline, and a gate of its
+    // own the size of the main one (an upload holds a permit for minutes, so sharing the
+    // main gate would let uploads starve reads); the meetings service adds the upload
+    // slots (server-wide, per workspace, per person) and the minimum rate.
     let uploads = meetcrm_meetings::upload_router(state.meetings.clone()).route_layer(
         axum::middleware::from_fn_with_state(stack::gate(state.max_in_flight), stack::shed),
     );

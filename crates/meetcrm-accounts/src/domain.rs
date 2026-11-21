@@ -50,7 +50,8 @@ pub enum Role {
     Owner,
     /// Members and tokens.
     Admin,
-    /// Reads.
+    /// Reads, and records meetings: creates them, attests consent, uploads, and deletes
+    /// their own.
     Member,
 }
 
@@ -88,6 +89,10 @@ pub enum Action {
     ManageOwners,
     /// List, create and delete API tokens.
     ManageTokens,
+    /// Create a meeting, attest its consent, upload its recording, delete one's own.
+    Record,
+    /// Delete anyone's meeting.
+    ManageMeetings,
     /// Delete the workspace.
     Delete,
 }
@@ -95,8 +100,10 @@ pub enum Action {
 /// The policy table: which role may do what.
 pub const fn allows(role: Role, action: Action) -> bool {
     match action {
-        Action::Read | Action::ListMembers => true,
-        Action::ManageMembers | Action::ManageTokens => matches!(role, Role::Owner | Role::Admin),
+        Action::Read | Action::ListMembers | Action::Record => true,
+        Action::ManageMembers | Action::ManageTokens | Action::ManageMeetings => {
+            matches!(role, Role::Owner | Role::Admin)
+        }
         Action::ManageOwners | Action::Delete => matches!(role, Role::Owner),
     }
 }
@@ -176,9 +183,18 @@ mod tests {
     fn the_policy_table() {
         use Action::*;
         for (role, may) in [
-            (Role::Owner, [true, true, true, true, true, true]),
-            (Role::Admin, [true, true, true, false, true, false]),
-            (Role::Member, [true, true, false, false, false, false]),
+            (
+                Role::Owner,
+                [true, true, true, true, true, true, true, true],
+            ),
+            (
+                Role::Admin,
+                [true, true, true, false, true, false, true, true],
+            ),
+            (
+                Role::Member,
+                [true, true, false, false, false, false, true, false],
+            ),
         ] {
             for (action, expected) in [
                 Read,
@@ -187,6 +203,8 @@ mod tests {
                 ManageOwners,
                 ManageTokens,
                 Delete,
+                Record,
+                ManageMeetings,
             ]
             .into_iter()
             .zip(may)

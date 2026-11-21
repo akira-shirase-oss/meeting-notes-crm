@@ -165,7 +165,11 @@ async fn run(config: Config) -> Result<Drained, Stop> {
     if let Ok(name) = signal.await {
         tracing::info!(signal = name, "drained after signal");
     }
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), workers).await;
+    match tokio::time::timeout(std::time::Duration::from_secs(5), workers).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::error!(error = %e, "the pipeline workers ended abnormally"),
+        Err(_) => tracing::warn!("the pipeline workers did not stop within 5 s"),
+    }
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), pool.close()).await;
     Ok(drained)
 }

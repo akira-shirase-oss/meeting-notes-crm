@@ -636,3 +636,366 @@ async fn uploads_past_the_slot_limit_are_refused_busy() {
     assert!(busy.headers.contains_key("retry-after"));
     held.abort();
 }
+
+/// Holds an upload of `meeting` open (its body never yields) until the handle is aborted.
+async fn hold_upload(
+    kit: &Arc<Kit>,
+    who: &Arc<common::Person>,
+    meeting: uuid::Uuid,
+) -> tokio::task::JoinHandle<common::Answer> {
+    let (body, polled) = untouched();
+    let held = {
+        let (kit, who) = (kit.clone(), who.clone());
+        tokio::spawn(async move { kit.upload_body(&who, meeting, body).await })
+    };
+    while !polled.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    held
+}
+
+async fn consented(kit: &Kit, who: &common::Person) -> uuid::Uuid {
+    let meeting = kit.meeting(who).await;
+    kit.consent(who, meeting).await;
+    meeting
+}
+
+// Attack: parallel uploads to one consented meeting. The first claims it before a byte is
+// read; the second is refused at once instead of taking a slot.
+#[tokio::test]
+async fn a_second_upload_to_a_meeting_is_refused_while_the_first_streams() {
+    let kit = Arc::new(Kit::tuned(|s| s.upload_idle = Duration::from_mins(10)).await);
+    let ana = Arc::new(kit.person("ana@example.test").await);
+    let meeting = consented(&kit, &ana).await;
+    let held = hold_upload(&kit, &ana, meeting).await;
+    let second = kit.upload(&ana, meeting, tone(1)).await;
+    assert_eq!(second.status, StatusCode::CONFLICT, "{}", second.body);
+    assert_eq!(second.code(), Some("media_exists"));
+    assert_eq!(kit.show(&ana, meeting).await.body["status"], "receiving");
+    held.abort();
+    let _ = held.await;
+    // The abandoned claim is released: the meeting takes a recording again.
+    let mut status = String::new();
+    for _ in 0..200 {
+        status = kit.show(&ana, meeting).await.body["status"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if status == "awaiting_media" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(status, "awaiting_media");
+    let again = kit.upload(&ana, meeting, tone(1)).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.body);
+}
+
+// Attack: one member opens slow uploads to take every server-wide slot. Their second is
+// refused (one per person), and another workspace still uploads.
+#[tokio::test]
+async fn one_member_cannot_take_every_upload_slot() {
+    let kit = Arc::new(Kit::tuned(|s| s.upload_idle = Duration::from_mins(10)).await);
+    let ana = Arc::new(kit.person("ana@example.test").await);
+    let ben = kit.person("ben@example.test").await;
+    let first = consented(&kit, &ana).await;
+    let second = consented(&kit, &ana).await;
+    let held = hold_upload(&kit, &ana, first).await;
+    let busy = kit.upload(&ana, second, tone(1)).await;
+    assert_eq!(
+        busy.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        busy.body
+    );
+    assert_eq!(busy.code(), Some("uploads_busy"));
+    assert_eq!(
+        kit.show(&ana, second).await.body["status"],
+        "awaiting_media"
+    );
+    let other = consented(&kit, &ben).await;
+    let accepted = kit.upload(&ben, other, tone(1)).await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED, "{}", accepted.body);
+    held.abort();
+}
+
+// Attack: the members of one workspace together take every slot. Past the workspace's
+// share they are refused; another workspace still uploads.
+#[tokio::test]
+async fn one_workspace_cannot_take_every_upload_slot() {
+    let kit = Arc::new(Kit::tuned(|s| s.upload_idle = Duration::from_mins(10)).await);
+    let ana = Arc::new(kit.person("ana@example.test").await);
+    let cal = Arc::new(kit.join(&ana, "cal@example.test", "member").await);
+    let dee = kit.join(&ana, "dee@example.test", "member").await;
+    let ben = kit.person("ben@example.test").await;
+    let a = consented(&kit, &ana).await;
+    let c = consented(&kit, &cal).await;
+    let d = consented(&kit, &dee).await;
+    let held = [
+        hold_upload(&kit, &ana, a).await,
+        hold_upload(&kit, &cal, c).await,
+    ];
+    let busy = kit.upload(&dee, d, tone(1)).await;
+    assert_eq!(
+        busy.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        busy.body
+    );
+    assert_eq!(busy.code(), Some("uploads_busy"));
+    let other = consented(&kit, &ben).await;
+    let accepted = kit.upload(&ben, other, tone(1)).await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED, "{}", accepted.body);
+    for h in held {
+        h.abort();
+    }
+}
+
+/// A body that sends one byte every 100 ms, forever.
+struct Trickle(Option<std::pin::Pin<Box<tokio::time::Sleep>>>);
+
+impl HttpBody for Trickle {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, std::io::Error>>> {
+        let sleep = self
+            .0
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(Duration::from_millis(100))));
+        match sleep.as_mut().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(()) => {
+                self.0 = None;
+                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from_static(b"R")))))
+            }
+        }
+    }
+}
+
+// Attack: a body that trickles a byte now and then never trips a per-read idle timer; it
+// is cut once it falls below the minimum rate, and the meeting is free again.
+#[tokio::test]
+async fn a_trickled_upload_is_cut_below_the_minimum_rate() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let meeting = consented(&kit, &ana).await;
+    let cut = tokio::time::timeout(
+        Duration::from_secs(60),
+        kit.upload_body(&ana, meeting, Body::new(Trickle(None))),
+    )
+    .await
+    .expect("a trickle held the upload open");
+    assert_eq!(cut.status, StatusCode::REQUEST_TIMEOUT, "{}", cut.body);
+    assert_eq!(cut.code(), Some("upload_too_slow"));
+    assert_eq!(kit.files().await, 0);
+    assert_eq!(
+        kit.show(&ana, meeting).await.body["status"],
+        "awaiting_media"
+    );
+}
+
+const CHUNKS: &str = "SELECT count(*) FROM media_chunks WHERE meeting_id = $1";
+
+/// Makes the meeting's job look like its worker died on it on its last attempt.
+async fn die_on_last_attempt(kit: &Kit, meeting: uuid::Uuid) {
+    sqlx::query(
+        "UPDATE jobs SET state = 'running', lease = gen_random_uuid(), \
+         lease_until = now() - interval '1 second', attempts = 3 \
+         WHERE meeting_id = $1 AND state <> 'done'",
+    )
+    .bind(meeting)
+    .execute(&kit.db.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn failure_cleanup_a_transcode_whose_worker_kept_dying_keeps_no_audio() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let meeting = kit.uploaded(&ana, tone(1)).await;
+    die_on_last_attempt(&kit, meeting).await;
+    assert_eq!(kit.work().await, Outcome::Idle);
+    let shown = kit.show(&ana, meeting).await.body;
+    assert_eq!(shown["status"], "media_rejected");
+    assert_eq!(shown["reason"], "attempts_exhausted");
+    assert_eq!(shown["audio_deleted"], true);
+    assert_eq!(kit.files().await, 0);
+}
+
+#[tokio::test]
+async fn failure_cleanup_a_transcription_whose_worker_kept_dying_keeps_no_audio_or_partial_text() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let audio = tone(4);
+    let recording = sha_hex(&audio);
+    kit.record(&recording, 0, &answer(2.0, &[(0, 0.1, 0.9, "Partial.")]));
+    kit.recorded.fault(
+        &meetcrm_transcribe::recorded::Recorded::key(&recording, 1),
+        Fault::Hang,
+    );
+    let meeting = kit.uploaded(&ana, audio).await;
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    // Chunk 0 is stored, then the worker "dies" before chunk 1.
+    let kit = Arc::new(kit);
+    let worker = {
+        let kit = kit.clone();
+        tokio::spawn(async move { kit.work().await })
+    };
+    while kit.count(SEGMENTS, meeting).await == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    worker.abort();
+    let _ = worker.await;
+    die_on_last_attempt(&kit, meeting).await;
+    assert_eq!(kit.work().await, Outcome::Idle);
+    let shown = kit.show(&ana, meeting).await.body;
+    assert_eq!(shown["status"], "transcription_unavailable");
+    assert_eq!(shown["audio_deleted"], true);
+    assert_eq!(kit.count(SEGMENTS, meeting).await, 0);
+    assert_eq!(kit.count(CHUNKS, meeting).await, 0);
+    assert_eq!(kit.files().await, 0);
+}
+
+#[tokio::test]
+async fn failure_cleanup_a_transcode_failing_transiently_past_its_attempts_ends_and_keeps_no_audio()
+{
+    let tools = Tools {
+        ffmpeg: std::path::PathBuf::from("/nonexistent/ffmpeg"),
+        ..common::tools()
+    };
+    let kit = Kit::with(|_| {}, None, Some(tools)).await;
+    let ana = kit.person("ana@example.test").await;
+    let meeting = kit.uploaded(&ana, tone(1)).await;
+    assert_eq!(kit.work().await, Outcome::Retrying("media_unavailable"));
+    assert_eq!(kit.show(&ana, meeting).await.body["status"], "transcoding");
+    assert_eq!(kit.work().await, Outcome::Retrying("media_unavailable"));
+    assert_eq!(kit.work().await, Outcome::Failed("media_unavailable"));
+    let shown = kit.show(&ana, meeting).await.body;
+    assert_eq!(shown["status"], "media_unavailable");
+    assert_eq!(shown["audio_deleted"], true);
+    assert_eq!(kit.files().await, 0);
+    assert_eq!(kit.work().await, Outcome::Idle);
+}
+
+#[tokio::test]
+async fn failure_cleanup_a_permanent_transcription_failure_keeps_no_audio_or_partial_text() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let audio = tone(4);
+    let recording = sha_hex(&audio);
+    kit.record(&recording, 0, &answer(2.0, &[(0, 0.1, 0.9, "Partial.")]));
+    kit.recorded.fault(
+        &meetcrm_transcribe::recorded::Recorded::key(&recording, 1),
+        Fault::Fail(TranscribeError::Rejected),
+    );
+    let meeting = kit.uploaded(&ana, audio.clone()).await;
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    assert_eq!(kit.work().await, Outcome::Failed("provider_rejected"));
+    let shown = kit.show(&ana, meeting).await.body;
+    assert_eq!(shown["status"], "transcription_unavailable");
+    assert_eq!(shown["audio_deleted"], true);
+    assert_eq!(kit.count(SEGMENTS, meeting).await, 0);
+    assert_eq!(kit.count(CHUNKS, meeting).await, 0);
+    assert_eq!(kit.files().await, 0);
+    // The way back: the same meeting takes the recording again, and this time completes.
+    kit.record(&recording, 1, &answer(2.0, &[(1, 0.2, 1.0, "Rest.")]));
+    let again = kit.upload(&ana, meeting, audio).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.body);
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    assert_eq!(kit.work().await, Outcome::Transcribed);
+    assert_eq!(kit.count(SEGMENTS, meeting).await, 2);
+}
+
+#[tokio::test]
+async fn failure_cleanup_audio_is_marked_deleted_only_once_its_files_are_gone() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let audio = tone(1);
+    kit.record(
+        &sha_hex(&audio),
+        0,
+        &answer(1.0, &[(0, 0.0, 0.5, "Hello.")]),
+    );
+    let meeting = kit.uploaded(&ana, audio).await;
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    // The meeting's directory cannot be unlinked from its parent.
+    let parent = kit.media.join("media").join(ana.workspace.to_string());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+    assert_eq!(kit.work().await, Outcome::Transcribed);
+    assert_eq!(kit.show(&ana, meeting).await.body["audio_deleted"], false);
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(kit.meetings.sweep().await.unwrap(), 1);
+    assert_eq!(kit.show(&ana, meeting).await.body["audio_deleted"], true);
+    assert_eq!(kit.files().await, 0);
+}
+
+#[tokio::test]
+async fn failure_cleanup_an_original_that_cannot_be_placed_leaves_no_file_and_no_stuck_meeting() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let meeting = consented(&kit, &ana).await;
+    let media = kit.media.join("media");
+    std::fs::set_permissions(&media, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let refused = kit.upload(&ana, meeting, tone(1)).await;
+    std::fs::set_permissions(&media, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        refused.body
+    );
+    assert_eq!(kit.files().await, 0);
+    // The record committed first; the worker finds no recording and ends it.
+    assert_eq!(kit.work().await, Outcome::Failed("media_missing"));
+    let shown = kit.show(&ana, meeting).await.body;
+    assert_eq!(shown["status"], "media_unavailable");
+    assert_eq!(shown["audio_deleted"], true);
+    assert_eq!(kit.work().await, Outcome::Idle);
+}
+
+// A page's text is bounded in bytes as well as segments: 300 segments of 4,000 bytes do
+// not come back in one ~1.2 MB page; the page stops under 1 MiB and the cursor resumes
+// exactly where it stopped, losing and repeating nothing.
+#[tokio::test]
+async fn a_transcript_page_stops_at_its_byte_budget() {
+    let kit = Kit::new().await;
+    let ana = kit.person("ana@example.test").await;
+    let audio = tone(1);
+    let text = "a".repeat(4_000);
+    let utterances: Vec<(u32, f64, f64, &str)> = (0..300)
+        .map(|i| {
+            let start = f64::from(i) * 0.003;
+            (0, start, start + 0.002, text.as_str())
+        })
+        .collect();
+    kit.record(&sha_hex(&audio), 0, &answer(1.0, &utterances));
+    let meeting = kit.uploaded(&ana, audio).await;
+    assert_eq!(kit.work().await, Outcome::Transcoded);
+    assert_eq!(kit.work().await, Outcome::Transcribed);
+    let path = format!(
+        "/v1/workspaces/{}/meetings/{meeting}/transcript?limit=1000",
+        ana.workspace
+    );
+    let first = kit.call(Method::GET, &path, Some(&ana.session), None).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    let page = first.body["segments"].as_array().unwrap().len();
+    assert_eq!(page, 1024 * 1024 / 4_000);
+    let next = first.body["next"].as_i64().unwrap();
+    let rest = kit
+        .call(
+            Method::GET,
+            &format!("{path}&after={next}"),
+            Some(&ana.session),
+            None,
+        )
+        .await;
+    assert_eq!(rest.status, StatusCode::OK, "{}", rest.body);
+    assert_eq!(rest.body["segments"].as_array().unwrap().len(), 300 - page);
+    assert!(rest.body["next"].is_null());
+}

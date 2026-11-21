@@ -28,6 +28,7 @@ fn command(database_url: &str, extra: &[(&str, &str)]) -> Command {
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("MEETCRM_DATABASE_URL", database_url)
         .env("MEETCRM_LISTEN", "127.0.0.1:0")
+        .env("MEETCRM_TRANSCRIBER", "recorded")
         .env(
             "MEETCRM_MEDIA_DIR",
             std::env::temp_dir().join(format!("meetcrm-binary-{}", uuid::Uuid::new_v4())),
